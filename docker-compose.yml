@@ -20,6 +20,8 @@ services:
     ports:
       - "${ELASTICMQ_PORT:-9324}:9324"
       - "9325:9325"
+    volumes:
+      - ./elasticmq.conf:/opt/elasticmq.conf
 
   ollama:
     image: ollama/ollama:latest

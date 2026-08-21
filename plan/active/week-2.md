@@ -1,8 +1,15 @@
 # Week 2 — Queue + worker + dedup
 
-Status: active
-Branch: (create off `main`, e.g. `week-2`)
+Status: active (Days 1–3 P0 done and verified; Day 4 P1 deferred; Day 5 demo verified with synthetic data, not yet with real Adzuna credentials)
+Branch: `week-2`
 Headline outcome (from [docs/WEEKLY_PLAN.md](../../docs/WEEKLY_PLAN.md#week-2--queue--worker--dedup)): one command ingests Adzuna → deduped rows in Postgres.
+
+## Progress
+- **Days 1–3 (all P0): done and verified live**, not just unit-tested. Published two synthetic messages for the same role from two sources plus one malformed message directly onto the real `raw-jobs` ElasticMQ queue, ran the real `services/worker` binary against them, and confirmed in Postgres: one `jobs` row, two `job_sources` rows. Separately confirmed the malformed message survives exactly `maxReceiveCount=3` redeliveries before landing in `raw-jobs-dlq`, per the redrive policy in `elasticmq.conf`.
+- Fixed a test-hygiene issue found along the way: the connector's SQS integration test was gated on `SQS_ENDPOINT_URL`/`SQS_QUEUE_URL`, which `.env` sets for every dev (needed for `make publish`) — so it would silently run, and could race a concurrently-draining worker on the same queue, on every plain `make test`. Re-gated behind an explicit `RUN_QUEUE_INTEGRATION_TEST=1`.
+- `docs/TRD.md` and `docs/ARCHITECTURE.md` updated to match: connectors normalise and publish `Job`; workers only hash + persist (was previously worded as "worker normalises `RawJob`").
+- **Day 4 (P1) deferred**: `first_seen_at`/`last_seen_at` already work correctly as a side effect of the `Upsert` SQL (verified by the idempotency test). Closure marking (flip `status='closed'` for stale listings) not implemented — no real ingestion cadence yet to make staleness meaningful; revisit once Week 3 adds more sources/runs.
+- **Day 5 caveat**: `make ingest` (connector → SQS → worker → Postgres) is wired in the `Makefile`, but running it against real Adzuna data needs `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` in `.env`, which aren't set in this environment. The equivalent pipeline was verified end-to-end with synthetic messages instead (see above); Adzuna's `Fetch` itself is already covered by Week 1's fixture test.
 
 Builds on Week 1 ([plan/completed/week-1.md](../completed/week-1.md)): the `Connector`/`Registry` types, the Adzuna connector, and the `jobs`/`job_sources` schema already exist and pass `go test ./...`.
 

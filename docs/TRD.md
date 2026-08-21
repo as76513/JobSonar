@@ -10,9 +10,9 @@ Hybrid: managed AWS services for stateful/security-heavy plumbing; self-hosted G
 
 | Component | Language | Runtime | Responsibility |
 |---|---|---|---|
-| `connectors` | Go | k8s CronJob | Fetch from each source, emit `RawJob` to queue |
-| `queue` | — | Amazon SQS (+ DLQ) | Buffer raw jobs, decouple ingest from processing |
-| `worker` | Go | k8s Deployment | Drain queue, normalise, dedup, upsert to DB |
+| `connectors` | Go | k8s CronJob | Fetch + normalise each source, publish unified `Job` to queue |
+| `queue` | — | Amazon SQS (+ DLQ) | Buffer normalised jobs, decouple ingest from processing |
+| `worker` | Go | k8s Deployment | Drain queue, compute `dedup_hash`, upsert to DB |
 | `embedder` | Python | k8s Deployment | Generate embeddings via local model, write vectors |
 | `agent` | Python | k8s Deployment / Job | Tiered scoring + gap analysis (LangGraph) |
 | `api` | Go (Fiber) | k8s Deployment | REST API for profile, jobs, applications, analytics |
@@ -53,6 +53,8 @@ type Connector interface {
 ```
 
 New sources implement this interface only. Connector failure is isolated (one source down ≠ pipeline down).
+
+`Normalize` runs inside the connector, before the message reaches the queue — connectors publish the unified `Job`, not the raw source payload. The worker only computes `dedup_hash` and upserts; it never re-normalises. (Connectors and workers are separate Go modules under `services/`, so a worker cannot import a connector's internal `Normalize` — keeping normalisation in the connector avoids that seam entirely, rather than working around it.)
 
 ### 4.2 LLM/embedding abstraction (Python)
 

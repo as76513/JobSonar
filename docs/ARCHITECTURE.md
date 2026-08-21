@@ -12,9 +12,9 @@ flowchart TD
         A3[ATS boards<br/>Greenhouse / Lever / Ashby]
     end
 
-    C[Connectors<br/>Go · k8s CronJobs<br/>self-hosted]
+    C[Connectors<br/>fetch + normalise · Go · k8s CronJobs<br/>self-hosted]
     Q[Ingestion queue<br/>Amazon SQS + DLQ<br/>managed]
-    W[Normalize & dedup<br/>Go workers · goroutines<br/>self-hosted]
+    W[Dedup & upsert<br/>Go workers · goroutines<br/>self-hosted]
     DB[(Storage<br/>RDS Postgres + pgvector<br/>managed)]
     EMB[Embedder<br/>local bge/nomic<br/>self-hosted]
 
@@ -47,8 +47,8 @@ flowchart TD
 
 ## Data flow (happy path)
 
-1. A **CronJob** wakes a Go connector; it fetches from its source, emits `RawJob` messages to **SQS**, exits.
-2. **Go workers** drain SQS, map each `RawJob` to the unified `Job` schema, compute `dedup_hash`, and upsert into **Postgres** (idempotent — re-processing is safe).
+1. A **CronJob** wakes a Go connector; it fetches from its source, normalises each result to the unified `Job` schema, and publishes it to **SQS**, then exits.
+2. **Go workers** drain SQS, compute `dedup_hash` from the already-normalised `Job`, and upsert into **Postgres** (idempotent — re-processing is safe).
 3. The **embedder** picks up jobs without vectors, generates embeddings with the **local model**, writes them to `job_embeddings`.
 4. The **agent first pass** (local Ollama + SQL) scores every new job: deterministic hard gates in SQL, then sub-scores (skill coverage, semantic similarity via pgvector, seniority/location/recency). Results land in `scores`.
 5. Jobs above the shortlist threshold go to the **deep-dive** node (**Bedrock Claude**) for gap explanation, tailoring hints, and justification, written to `analyses`. Everything below threshold never incurs premium-model cost.

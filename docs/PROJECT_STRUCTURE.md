@@ -33,6 +33,7 @@ jobsonar/
 │   │   ├── cmd/connector/main.go
 │   │   ├── internal/
 │   │   │   ├── connector/           # Connector interface + registry
+│   │   │   ├── queue/               # SQS publisher — connectors normalise, then publish Job
 │   │   │   ├── adzuna/
 │   │   │   ├── jooble/
 │   │   │   ├── ats/                 # greenhouse, lever, ashby
@@ -40,10 +41,11 @@ jobsonar/
 │   │   ├── go.mod
 │   │   └── connector_test.go
 │   │
-│   ├── worker/                      # Go — normalise + dedup consumer
+│   ├── worker/                      # Go — dedup + persist consumer (own go.mod)
 │   │   ├── cmd/worker/main.go
-│   │   ├── internal/normalize/
-│   │   ├── internal/dedup/
+│   │   ├── internal/queue/          # SQS consumer
+│   │   ├── internal/job/            # Job schema, duplicated from connectors deliberately (separate module)
+│   │   ├── internal/dedup/          # dedup_hash (TRD §3)
 │   │   └── internal/store/          # pgx upserts
 │   │
 │   ├── api/                         # Go Fiber
