@@ -1,1 +1,12 @@
 .DS_Store
+.env
+jobs.ndjson
+*.exe
+*.test
+bin/
+dist/
+coverage.out
+services/connectors/connector
+.idea/
+.vscode/
+*.swp
