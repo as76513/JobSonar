@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jobsonar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jobsonar}
+      POSTGRES_DB: ${POSTGRES_DB:-jobsonar}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jobsonar} -d ${POSTGRES_DB:-jobsonar}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  elasticmq:
+    image: softwaremill/elasticmq-native:1.6.12
+    ports:
+      - "${ELASTICMQ_PORT:-9324}:9324"
+      - "9325:9325"
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  postgres_data:
+  ollama_data:

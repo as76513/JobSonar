@@ -1,14 +1,12 @@
-# JobRadar
+# JobSonar
 
 An agentic, resume-driven job tracker. It sources jobs from free aggregator APIs and company ATS boards, scores each opening against your resume with an explainable match model, tracks applications as a personal ATS, and gives you a conversion funnel so you learn which applications actually turn into interviews.
-
-*Name is a placeholder — rename freely.*
 
 ---
 
 ## Why this project exists
 
-Job boards optimise for applications sent, not offers received. JobRadar inverts that: it tells you **why** each job is a fit, **what gap** to close, and — over time — **which kinds of applications convert for you**. That feedback loop is the differentiator; matching and tracking are commodity.
+Job boards optimise for applications sent, not offers received. JobSonar inverts that: it tells you **why** each job is a fit, **what gap** to close, and — over time — **which kinds of applications convert for you**. That feedback loop is the differentiator; matching and tracking are commodity.
 
 Two design commitments carried through the whole project:
 
@@ -58,5 +56,5 @@ Build in two vertical stripes. **Stripe one** is the boring-but-real data path �
 
 ## Non-goals (deliberately excluded)
 
-- **Auto-apply / automated form submission.** Violates most portals' ToS, produces low-quality applications, risks account bans. JobRadar *assists* a human to apply fast (tailored resume, pre-filled draft, one-click open) — it never submits on your behalf unseen.
+- **Auto-apply / automated form submission.** Violates most portals' ToS, produces low-quality applications, risks account bans. JobSonar *assists* a human to apply fast (tailored resume, pre-filled draft, one-click open) — it never submits on your behalf unseen.
 - **Scraping LinkedIn / Indeed as a primary source.** Retired APIs and aggressive bot management. Optional scraper connector only, behind the same interface, respecting robots.txt and rate limits.
