@@ -1,6 +1,6 @@
 ---
 name: infra-deploy
-description: Modify JobRadar infrastructure or deployment (Terraform, Helm/k8s manifests, CronJobs, External Secrets, IRSA). Use for cloud or local cluster changes. Do NOT use for application logic.
+description: Modify JobSonar infrastructure or deployment (Terraform, Helm/k8s manifests, CronJobs, External Secrets, IRSA). Use for cloud or local cluster changes. Do NOT use for application logic.
 ---
 # Infra & deploy
 1. Every change must keep the local (kind/k3s + Ollama, no cloud) path working.

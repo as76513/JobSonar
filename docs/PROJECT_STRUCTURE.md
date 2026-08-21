@@ -1,9 +1,9 @@
-# Project structure — JobRadar
+# Project structure — JobSonar
 
 A polyglot monorepo. Go owns the plumbing, Python owns the AI, and they share only the queue and the database. Infra and deploy manifests keep the local/cloud split honest.
 
 ```
-jobradar/
+jobsonar/
 ├── README.md
 ├── CLAUDE.md                        # working agreement for Claude Code
 ├── docker-compose.yml               # local stack: postgres, ollama, sqs-emulator, services
@@ -33,6 +33,7 @@ jobradar/
 │   │   ├── cmd/connector/main.go
 │   │   ├── internal/
 │   │   │   ├── connector/           # Connector interface + registry
+│   │   │   ├── queue/               # SQS publisher — connectors normalise, then publish Job
 │   │   │   ├── adzuna/
 │   │   │   ├── jooble/
 │   │   │   ├── ats/                 # greenhouse, lever, ashby
@@ -40,10 +41,11 @@ jobradar/
 │   │   ├── go.mod
 │   │   └── connector_test.go
 │   │
-│   ├── worker/                      # Go — normalise + dedup consumer
+│   ├── worker/                      # Go — dedup + persist consumer (own go.mod)
 │   │   ├── cmd/worker/main.go
-│   │   ├── internal/normalize/
-│   │   ├── internal/dedup/
+│   │   ├── internal/queue/          # SQS consumer
+│   │   ├── internal/job/            # Job schema, duplicated from connectors deliberately (separate module)
+│   │   ├── internal/dedup/          # dedup_hash (TRD §3)
 │   │   └── internal/store/          # pgx upserts
 │   │
 │   ├── api/                         # Go Fiber
@@ -53,7 +55,7 @@ jobradar/
 │   │   └── internal/analytics/      # funnel queries
 │   │
 │   └── agent/                       # Python — the AI layer
-│       ├── jobradar_agent/
+│       ├── jobsonar_agent/
 │       │   ├── llm/                 # LLM + Embedder protocols; ollama & bedrock impls
 │       │   ├── embed/               # local embedding pipeline
 │       │   ├── score/               # sub-scores + hard gates (gates call SQL)
@@ -90,7 +92,7 @@ jobradar/
 ## Conventions
 
 - **Go modules** per service under `services/` (independent build/deploy); shared types via a small `pkg/` or duplicated deliberately to avoid coupling.
-- **Python** single package `jobradar_agent`; `LLM`/`Embedder` behind protocols so the cascade is config-driven.
+- **Python** single package `jobsonar_agent`; `LLM`/`Embedder` behind protocols so the cascade is config-driven.
 - **Hard gates live in SQL** (`services/api` or a shared query file), never in the Python LLM path.
 - **One image per service**, same image local and cloud; environment differences live only in manifests/config.
 - **Migrations are the source of truth** for the schema in TRD §3.

@@ -1,6 +1,6 @@
 ---
 name: connector-authoring
-description: Author or repair a JobRadar source connector. Use when adding a new job source (aggregator API or ATS board) or fixing an existing one. Do NOT use for scoring or infra work.
+description: Author or repair a JobSonar source connector. Use when adding a new job source (aggregator API or ATS board) or fixing an existing one. Do NOT use for scoring or infra work.
 ---
 # Authoring a connector
 1. Create `services/connectors/internal/<source>/`.
