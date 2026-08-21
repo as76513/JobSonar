@@ -1,4 +1,4 @@
-# Weekly plan — JobRadar
+# Weekly plan — JobSonar
 
 A 10-week plan sized for evenings/weekends (~8–12 hrs/week). Sequenced **data path first, agent second, cloud third, polish last** — because most job-tracker projects die on sourcing, not matching. Each week has a single headline outcome you can demo.
 
@@ -8,17 +8,19 @@ Legend: **P0** = must land this week · **P1** = if time allows.
 
 ## Phase 1 — The boring, real data path (Stripe one)
 
-### Week 1 — Foundations & one connector
+### Week 1 — Foundations & one connector ✅ complete
 - **P0** Repo scaffold (structure from `PROJECT_STRUCTURE.md`), `docker-compose.yml` with Postgres + SQS emulator (LocalStack/ElasticMQ) + Ollama.
 - **P0** DB migrations for `jobs`, `job_sources` (TRD §3 subset).
 - **P0** Go `Connector` interface + **Adzuna** connector with a recorded-fixture test.
 - **Demo:** `make up`; running the Adzuna connector prints normalised jobs.
+- **Detail:** [plan/completed/week-1.md](../plan/completed/week-1.md)
 
-### Week 2 — Queue + worker + dedup
+### Week 2 — Queue + worker + dedup 🚧 in progress
 - **P0** Connector emits `RawJob` to SQS; **Go worker** drains it, normalises, computes `dedup_hash`, upserts.
 - **P0** Dedup property test (same role, two sources → one job, two URLs).
 - **P1** `first_seen`/`last_seen` + closure marking.
 - **Demo:** one command ingests Adzuna → deduped rows in Postgres.
+- **Detail:** [plan/active/week-2.md](../plan/active/week-2.md)
 
 ### Week 3 — More sources + the API skeleton
 - **P0** Add **Jooble** + one **ATS** connector (Greenhouse or Lever) behind the same interface.

@@ -1,10 +1,10 @@
-# Functional Requirements Document (FRD) — JobRadar
+# Functional Requirements Document (FRD) — JobSonar
 
 Version 0.1 · Owner: you · Status: Draft
 
 ## 1. Purpose & scope
 
-JobRadar helps a single job seeker find, evaluate, and track relevant roles. It ingests jobs from legitimate sources, ranks them against a resume with an explainable score, and manages the application lifecycle with analytics. Scope is a **single-user** tool (multi-user is out of scope for v1).
+JobSonar helps a single job seeker find, evaluate, and track relevant roles. It ingests jobs from legitimate sources, ranks them against a resume with an explainable score, and manages the application lifecycle with analytics. Scope is a **single-user** tool (multi-user is out of scope for v1).
 
 ## 2. Actors
 

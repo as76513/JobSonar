@@ -1,9 +1,9 @@
 ---
 name: scoring-model
-description: Add or modify a JobRadar match sub-score or the scoring cascade. Use when touching skill coverage, semantic similarity, seniority/location/recency, or the shortlist threshold. Do NOT use for connectors or infra.
+description: Add or modify a JobSonar match sub-score or the scoring cascade. Use when touching skill coverage, semantic similarity, seniority/location/recency, or the shortlist threshold. Do NOT use for connectors or infra.
 ---
 # Scoring changes
-1. Sub-scores live in services/agent/jobradar_agent/score/. Each is named and surfaced in the breakdown.
+1. Sub-scores live in services/agent/jobsonar_agent/score/. Each is named and surfaced in the breakdown.
 2. Hard gates (must-have skills, seniority, location) are evaluated in SQL, not the model.
 3. First pass uses the local LLM/embeddings and touches every job.
 4. Deep dive (Bedrock) runs only above the shortlist threshold.

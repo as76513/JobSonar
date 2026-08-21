@@ -1,4 +1,4 @@
-# Technical Requirements Document (TRD) — JobRadar
+# Technical Requirements Document (TRD) — JobSonar
 
 Version 0.1 · Status: Draft · Companion to [FRD.md](FRD.md)
 

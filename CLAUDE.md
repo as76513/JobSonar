@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Working agreement for Claude Code on the JobRadar repo. Read this before making changes.
+Working agreement for Claude Code on the JobSonar repo. Read this before making changes.
 
 ## What this project is
 
@@ -25,7 +25,7 @@ A single-user, resume-driven job tracker. Sources jobs from **legitimate free AP
 ## Conventions
 
 - New source → implement the `Connector` interface in `services/connectors/internal/<source>/`, register it, add a fixture-based test. Nothing else in the pipeline should change. Use the `connector-authoring` skill.
-- New scoring signal → add a sub-score in `services/agent/jobradar_agent/score/`, expose it in the breakdown, add a golden test. Use the `scoring-model` skill.
+- New scoring signal → add a sub-score in `services/agent/jobsonar_agent/score/`, expose it in the breakdown, add a golden test. Use the `scoring-model` skill.
 - Schema changes → a migration in `db/migrations/`; update `docs/TRD.md` §3 in the same change.
 - Every service emits OpenTelemetry traces/metrics. New services must wire the OTel exporter.
 

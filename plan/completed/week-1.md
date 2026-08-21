@@ -1,8 +1,11 @@
 # Week 1 — Foundations & one connector
 
-Status: active
-Branch: `week-1`
+Status: completed
+Branch: `week-1` (merged to `main` via PR #1 and PR #2)
 Headline outcome (from [docs/WEEKLY_PLAN.md](../../docs/WEEKLY_PLAN.md#week-1--foundations--one-connector)): `make up`; running the Adzuna connector prints normalised jobs.
+
+## Outcome
+Shipped as planned, day-by-day, with no deviations from the plan below. `docker-compose.yml` (Postgres+pgvector, ElasticMQ, Ollama), the `jobs`/`job_sources` goose migration, the `Connector`/`Registry` types, and the Adzuna connector with its fixture test all landed in commit `6cf968b` ("Add Week 1 local stack and Adzuna connector"). `go test ./...` passes for `services/connectors`.
 
 ## Day 1 — Repo scaffold + local stack
 - Create the skeleton per [PROJECT_STRUCTURE.md](../../docs/PROJECT_STRUCTURE.md): `services/connectors/{cmd/connector,internal/connector,internal/adzuna}`, `db/migrations/`, `db/seed/`.
@@ -33,7 +36,6 @@ Headline outcome (from [docs/WEEKLY_PLAN.md](../../docs/WEEKLY_PLAN.md#week-1--f
 - Buffer day for whichever of the above slipped — Adzuna API key approval / rate-limit surprises are the likeliest snag.
 
 ## Definition of done
-Matches [CLAUDE.md](../../CLAUDE.md)'s checklist — `make test` passes, the connector has an isolated fixture test, nothing secret is committed, runs fully local via `make up`.
+Matches [CLAUDE.md](../../CLAUDE.md)'s checklist — `make test` passes, the connector has an isolated fixture test, nothing secret is committed, runs fully local via `make up`. All satisfied.
 
-## Move to completed
-When the week is done, move this file to `plan/completed/week-1.md` and update `Status:` above.
+Next: [plan/active/week-2.md](../active/week-2.md).

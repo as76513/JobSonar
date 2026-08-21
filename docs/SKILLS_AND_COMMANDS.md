@@ -1,4 +1,4 @@
-# Skills & commands — JobRadar (Claude Code)
+# Skills & commands — JobSonar (Claude Code)
 
 Two kinds of reusable automation live in `.claude/`:
 
@@ -18,7 +18,7 @@ Below are the ones worth creating, with starter content.
 ```markdown
 ---
 name: connector-authoring
-description: Author or repair a JobRadar source connector. Use when adding a new
+description: Author or repair a JobSonar source connector. Use when adding a new
   job source (aggregator API or ATS board) or fixing an existing one. Do NOT use
   for scoring or infra work.
 ---
@@ -40,12 +40,12 @@ Aggregator APIs and ATS endpoints only. The scraper connector stays disabled by 
 ```markdown
 ---
 name: scoring-model
-description: Add or modify a JobRadar match sub-score or the scoring cascade. Use
+description: Add or modify a JobSonar match sub-score or the scoring cascade. Use
   when touching skill coverage, semantic similarity, seniority/location/recency, or
   the shortlist threshold. Do NOT use for connectors or infra.
 ---
 # Scoring changes
-1. Sub-scores live in services/agent/jobradar_agent/score/. Each is named and surfaced in the breakdown.
+1. Sub-scores live in services/agent/jobsonar_agent/score/. Each is named and surfaced in the breakdown.
 2. Hard gates (must-have skills, seniority, location) are evaluated in SQL, not the model.
 3. First pass uses the local LLM/embeddings and touches every job.
 4. Deep dive (Bedrock) runs only above the shortlist threshold.
@@ -60,7 +60,7 @@ description: Add or modify a JobRadar match sub-score or the scoring cascade. Us
 ```markdown
 ---
 name: infra-deploy
-description: Modify JobRadar infrastructure or deployment (Terraform, Helm/k8s
+description: Modify JobSonar infrastructure or deployment (Terraform, Helm/k8s
   manifests, CronJobs, External Secrets, IRSA). Use for cloud or local cluster
   changes. Do NOT use for application logic.
 ---

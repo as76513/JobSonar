@@ -1,4 +1,4 @@
-# Architecture — JobRadar
+# Architecture — JobSonar
 
 Hybrid architecture: buy the stateful/security-heavy, free-tier pieces; build the compute-heavy, portable, high-learning pieces; cascade inference so cost tracks value.
 
