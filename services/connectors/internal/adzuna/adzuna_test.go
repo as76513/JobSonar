@@ -125,6 +125,35 @@ func TestFetchBackoffOn429(t *testing.T) {
 	}
 }
 
+func TestFetchFansOutRolesAndRegions(t *testing.T) {
+	body := fixture(t)
+	var hits atomic.Int32
+	var whats []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		whats = append(whats, r.URL.Query().Get("what"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New("id", "key", WithBaseURL(srv.URL), WithMinInterval(0))
+	raws, err := c.Fetch(context.Background(), connector.SearchParams{
+		Query:   "DevOps Lead,DevSecOps Lead",
+		Country: "in,nl",
+		Where:   "Pune,Amsterdam",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hits.Load() != 4 {
+		t.Fatalf("hits=%d want 4 whats=%v", hits.Load(), whats)
+	}
+	if len(raws) != 3 {
+		t.Fatalf("deduped jobs=%d want 3 (same fixture each time)", len(raws))
+	}
+}
+
 func TestFetchHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

@@ -1,12 +1,12 @@
-package adzuna
+package jooble
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,17 +16,16 @@ import (
 )
 
 const (
-	defaultBaseURL = "https://api.adzuna.com"
-	defaultCountry = "us"
-	defaultPerPage = 20
+	defaultBaseURL = "https://jooble.org"
 	maxRetries     = 4
 	maxBackoff     = 30 * time.Second
 )
 
-// Client fetches and normalises Adzuna search results.
+// Client fetches and normalises Jooble search results.
+// JOOBLE_BASE_URL must match the region the API key was issued for
+// (jooble.org = US; nl.jooble.org = NL).
 type Client struct {
-	appID      string
-	appKey     string
+	apiKey     string
 	baseURL    string
 	httpClient *http.Client
 
@@ -35,13 +34,12 @@ type Client struct {
 	minInterval time.Duration
 }
 
-func New(appID, appKey string, opts ...Option) *Client {
+func New(apiKey string, opts ...Option) *Client {
 	c := &Client{
-		appID:       appID,
-		appKey:      appKey,
+		apiKey:      apiKey,
 		baseURL:     defaultBaseURL,
 		httpClient:  &http.Client{Timeout: 15 * time.Second},
-		minInterval: time.Second, // conservative; 429 backoff is the hard guard
+		minInterval: time.Second,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -63,15 +61,15 @@ func WithMinInterval(d time.Duration) Option {
 	return func(c *Client) { c.minInterval = d }
 }
 
-func (c *Client) Name() string { return "adzuna" }
+func (c *Client) Name() string { return "jooble" }
 
 func (c *Client) RateLimit() connector.RateLimit {
 	return connector.RateLimit{Requests: 1, Window: time.Second}
 }
 
 func (c *Client) Fetch(ctx context.Context, q connector.SearchParams) ([]connector.RawJob, error) {
-	if c.appID == "" || c.appKey == "" {
-		return nil, fmt.Errorf("ADZUNA_APP_ID and ADZUNA_APP_KEY are required")
+	if c.apiKey == "" {
+		return nil, fmt.Errorf("JOOBLE_API_KEY is required")
 	}
 	var (
 		out     []connector.RawJob
@@ -109,50 +107,41 @@ func (c *Client) fetchOne(ctx context.Context, q connector.SearchParams) ([]conn
 		return nil, err
 	}
 
-	country := q.Country
-	if country == "" {
-		country = defaultCountry
-	}
 	page := q.Page
 	if page < 1 {
 		page = 1
 	}
-	perPage := q.PerPage
-	if perPage < 1 {
-		perPage = defaultPerPage
+	location := q.Where
+	if location == "" {
+		location = q.Country
 	}
 
-	u, err := url.Parse(fmt.Sprintf("%s/v1/api/jobs/%s/search/%d", c.baseURL, url.PathEscape(country), page))
+	body, err := json.Marshal(map[string]any{
+		"keywords":      q.Query,
+		"location":      location,
+		"page":          strconv.Itoa(page),
+		"companysearch": "false",
+	})
 	if err != nil {
 		return nil, err
 	}
-	qs := u.Query()
-	qs.Set("app_id", c.appID)
-	qs.Set("app_key", c.appKey)
-	qs.Set("results_per_page", strconv.Itoa(perPage))
-	qs.Set("content-type", "application/json")
-	if q.Query != "" {
-		qs.Set("what", q.Query)
-	}
-	if q.Where != "" {
-		qs.Set("where", q.Where)
-	}
-	u.RawQuery = qs.Encode()
 
+	endpoint := c.baseURL + "/api/" + c.apiKey
 	var lastErr error
 	backoff := time.Second
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("request: %w", err)
 		}
-		body, readErr := io.ReadAll(resp.Body)
+		raw, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
 			return nil, fmt.Errorf("read body: %w", readErr)
@@ -160,9 +149,8 @@ func (c *Client) fetchOne(ctx context.Context, q connector.SearchParams) ([]conn
 
 		switch {
 		case resp.StatusCode == http.StatusTooManyRequests:
-			wait := retryAfter(resp.Header, backoff)
 			lastErr = fmt.Errorf("HTTP 429")
-			if err := sleep(ctx, wait); err != nil {
+			if err := sleep(ctx, retryAfter(resp.Header, backoff)); err != nil {
 				return nil, err
 			}
 			if backoff < maxBackoff {
@@ -170,16 +158,16 @@ func (c *Client) fetchOne(ctx context.Context, q connector.SearchParams) ([]conn
 			}
 			continue
 		case resp.StatusCode != http.StatusOK:
-			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(body, 256))
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(raw, 256))
 		}
 
 		var parsed searchResponse
-		if err := json.Unmarshal(body, &parsed); err != nil {
+		if err := json.Unmarshal(raw, &parsed); err != nil {
 			return nil, fmt.Errorf("decode: %w", err)
 		}
-		out := make([]connector.RawJob, 0, len(parsed.Results))
-		for _, raw := range parsed.Results {
-			out = append(out, connector.RawJob{Source: c.Name(), Payload: raw})
+		out := make([]connector.RawJob, 0, len(parsed.Jobs))
+		for _, job := range parsed.Jobs {
+			out = append(out, connector.RawJob{Source: c.Name(), Payload: job})
 		}
 		return out, nil
 	}
@@ -190,30 +178,26 @@ func (c *Client) fetchOne(ctx context.Context, q connector.SearchParams) ([]conn
 }
 
 func (c *Client) Normalize(raw connector.RawJob) (connector.Job, error) {
-	var ad ad
+	var ad listing
 	if err := json.Unmarshal(raw.Payload, &ad); err != nil {
 		return connector.Job{}, fmt.Errorf("normalize: %w", err)
 	}
-	if ad.Title == "" || ad.RedirectURL == "" {
-		return connector.Job{}, fmt.Errorf("missing title or redirect_url")
+	if ad.Title == "" || ad.Link == "" {
+		return connector.Job{}, fmt.Errorf("missing title or link")
 	}
-
 	job := connector.Job{
 		Source:        c.Name(),
-		SourceURL:     ad.RedirectURL,
+		SourceURL:     ad.Link,
 		Title:         ad.Title,
-		Company:       ad.Company.DisplayName,
-		Location:      ad.Location.DisplayName,
+		Company:       ad.Company,
+		Location:      ad.Location,
 		RemoteType:    remoteType(ad),
-		DescriptionMD: ad.Description,
-		SalaryMin:     ad.SalaryMin,
-		SalaryMax:     ad.SalaryMax,
+		DescriptionMD: ad.Snippet,
 	}
-	if ad.Created != "" {
-		if t, err := time.Parse(time.RFC3339, ad.Created); err == nil {
-			job.PostedAt = t
-		}
+	if t, ok := parseTime(ad.Updated); ok {
+		job.PostedAt = t
 	}
+	job.SalaryMin, job.SalaryMax, job.Currency = parseSalary(ad.Salary)
 	return job, nil
 }
 
@@ -235,61 +219,90 @@ func (c *Client) throttle(ctx context.Context) error {
 }
 
 type searchResponse struct {
-	Results []json.RawMessage `json:"results"`
+	Jobs []json.RawMessage `json:"jobs"`
 }
 
-type ad struct {
-	ID          json.RawMessage `json:"id"`
-	Title       string          `json:"title"`
-	Description string          `json:"description"`
-	Created     string          `json:"created"`
-	RedirectURL string          `json:"redirect_url"`
-	SalaryMin   *float64        `json:"salary_min"`
-	SalaryMax   *float64        `json:"salary_max"`
-	Company     struct {
-		DisplayName string `json:"display_name"`
-	} `json:"company"`
-	Location struct {
-		DisplayName string `json:"display_name"`
-	} `json:"location"`
+type listing struct {
+	Title    string `json:"title"`
+	Location string `json:"location"`
+	Snippet  string `json:"snippet"`
+	Salary   string `json:"salary"`
+	Link     string `json:"link"`
+	Company  string `json:"company"`
+	Updated  string `json:"updated"`
+	Type     string `json:"type"`
 }
 
-func remoteType(ad ad) string {
-	blob := strings.ToLower(strings.Join([]string{
-		ad.Title,
-		ad.Location.DisplayName,
-		ad.Description,
-	}, " "))
+func remoteType(ad listing) string {
+	blob := strings.ToLower(ad.Title + " " + ad.Location + " " + ad.Snippet)
 	if strings.Contains(blob, "remote") {
 		return "remote"
 	}
 	return ""
 }
 
+func parseTime(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// parseSalary only accepts clearly numeric ranges like "50000 - 80000 EUR"
+// or "50000". Anything else is left unset — do not invent fields.
+func parseSalary(s string) (min *float64, max *float64, currency string) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil, ""
+	}
+	fields := strings.Fields(s)
+	nums := make([]float64, 0, 2)
+	for _, f := range fields {
+		f = strings.Trim(f, "-–,")
+		f = strings.ReplaceAll(f, ",", "")
+		if f == "" {
+			continue
+		}
+		n, err := strconv.ParseFloat(f, 64)
+		if err != nil {
+			if currency == "" && isCurrencyToken(f) {
+				currency = strings.ToUpper(f)
+			}
+			continue
+		}
+		nums = append(nums, n)
+	}
+	if len(nums) == 0 {
+		return nil, nil, ""
+	}
+	min = &nums[0]
+	if len(nums) > 1 {
+		max = &nums[1]
+	}
+	return min, max, currency
+}
+
+func isCurrencyToken(s string) bool {
+	switch strings.ToUpper(s) {
+	case "EUR", "USD", "GBP", "INR", "AUD", "CAD", "CHF", "PLN":
+		return true
+	}
+	return false
+}
+
 func retryAfter(h http.Header, fallback time.Duration) time.Duration {
 	v := h.Get("Retry-After")
-	if v == "" {
-		return fallback
-	}
 	if secs, err := strconv.Atoi(v); err == nil {
 		d := time.Duration(secs) * time.Second
-		if d > maxBackoff {
-			return maxBackoff
+		if d > 0 && d < maxBackoff {
+			return d
 		}
-		if d < 0 {
-			return fallback
-		}
-		return d
-	}
-	if t, err := http.ParseTime(v); err == nil {
-		d := time.Until(t)
-		if d > maxBackoff {
-			return maxBackoff
-		}
-		if d < 0 {
-			return fallback
-		}
-		return d
 	}
 	return fallback
 }

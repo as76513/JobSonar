@@ -2,18 +2,21 @@ COMPOSE   ?= docker compose
 GOOSE     ?= go run github.com/pressly/goose/v3/cmd/goose@v3.24.3
 CONNECTORS := services/connectors
 WORKER    := services/worker
+API       := services/api
 
 ifneq (,$(wildcard .env))
 include .env
 endif
 
 export ADZUNA_APP_ID ADZUNA_APP_KEY ADZUNA_COUNTRY ADZUNA_WHAT ADZUNA_WHERE
+export JOOBLE_API_KEY JOOBLE_BASE_URL API_ADDR
 export POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB POSTGRES_DSN POSTGRES_PORT
 export SQS_ENDPOINT_URL SQS_QUEUE_URL AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 
 POSTGRES_DSN ?= postgres://jobsonar:jobsonar@localhost:5432/jobsonar?sslmode=disable
+LIMIT        ?= 20
 
-.PHONY: up down migrate test connector publish worker ingest demo wait-db
+.PHONY: up down migrate seed test connector publish worker ingest api demo wait-db show-jobs show jobs
 
 up:
 	$(COMPOSE) up -d
@@ -33,9 +36,16 @@ wait-db:
 migrate: wait-db
 	$(GOOSE) -dir db/migrations postgres "$(POSTGRES_DSN)" up
 
+seed: wait-db
+	$(COMPOSE) exec -T postgres psql -U $${POSTGRES_USER:-jobsonar} -d $${POSTGRES_DB:-jobsonar} -f - < db/seed/greenhouse.sql
+
 test:
 	cd $(CONNECTORS) && go test ./...
 	cd $(WORKER) && go test ./...
+	cd $(API) && go test ./...
+
+api:
+	cd $(API) && go run ./cmd/api
 
 connector:
 	cd $(CONNECTORS) && go run ./cmd/connector
@@ -50,6 +60,28 @@ publish:
 # ingest`, not yet for a long-running deployment.
 worker:
 	cd $(WORKER) && go run ./cmd/worker
+
+# List persisted jobs. Usage:
+#   make show-jobs
+#   make show jobs
+#   make show-jobs LIMIT=50
+show-jobs: wait-db
+	@echo "$(LIMIT)" | grep -Eq '^[0-9]+$$' || (echo "LIMIT must be a non-negative integer"; exit 1)
+	@$(COMPOSE) exec -T postgres psql -U $${POSTGRES_USER:-jobsonar} -d $${POSTGRES_DB:-jobsonar} -P pager=off -c "\
+		SELECT count(*) AS total_jobs FROM jobs;"
+	@$(COMPOSE) exec -T postgres psql -U $${POSTGRES_USER:-jobsonar} -d $${POSTGRES_DB:-jobsonar} -P pager=off -c "\
+		SELECT source, title, company, location, status, posted_at \
+		FROM jobs \
+		ORDER BY last_seen_at DESC, title \
+		LIMIT $(LIMIT);"
+
+# `make show` and `make show jobs` both list jobs (second word is a no-op).
+show:
+	@$(MAKE) --no-print-directory show-jobs LIMIT=$(LIMIT)
+jobs:
+	@if [ "$(filter show,$(MAKECMDGOALS))" = "" ]; then \
+		$(MAKE) --no-print-directory show-jobs LIMIT=$(LIMIT); \
+	fi
 
 # Week 2 demo: connector -> SQS -> worker -> deduped rows in Postgres.
 ingest: up migrate publish

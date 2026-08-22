@@ -1,8 +1,13 @@
 # Week 2 — Queue + worker + dedup
 
-Status: active (Days 1–3 and 5 P0 done and verified with real Adzuna data; only Day 4 P1 deferred)
+Status: completed
 Branch: `week-2`
 Headline outcome (from [docs/WEEKLY_PLAN.md](../../docs/WEEKLY_PLAN.md#week-2--queue--worker--dedup)): one command ingests Adzuna → deduped rows in Postgres.
+
+## Outcome
+P0 shipped and verified live. Connectors publish a normalised `Job` to ElasticMQ (`raw-jobs` + DLQ); the Go worker drains, computes `dedup_hash`, and upserts `jobs` / `job_sources`. Dedup, idempotency, and poison-message tests pass. `make ingest` against live Adzuna persisted 20 jobs. No secrets committed; connector and worker share only the queue and Postgres.
+
+**P1 leftover (not blocking close):** `first_seen_at` / `last_seen_at` work via upsert. Closure (`status='closed'` for stale listings) is deferred until ingest runs often enough for staleness to mean something — revisit after Week 3 adds more sources.
 
 ## Progress
 - **Days 1–3 (all P0): done and verified live**, not just unit-tested. Published two synthetic messages for the same role from two sources plus one malformed message directly onto the real `raw-jobs` ElasticMQ queue, ran the real `services/worker` binary against them, and confirmed in Postgres: one `jobs` row, two `job_sources` rows. Separately confirmed the malformed message survives exactly `maxReceiveCount=3` redeliveries before landing in `raw-jobs-dlq`, per the redrive policy in `elasticmq.conf`.
@@ -11,13 +16,11 @@ Headline outcome (from [docs/WEEKLY_PLAN.md](../../docs/WEEKLY_PLAN.md#week-2--q
 - **Day 4 (P1) deferred**: `first_seen_at`/`last_seen_at` already work correctly as a side effect of the `Upsert` SQL (verified by the idempotency test). Closure marking (flip `status='closed'` for stale listings) not implemented — no real ingestion cadence yet to make staleness meaningful; revisit once Week 3 adds more sources/runs.
 - **Day 5: done and verified with real data.** `make ingest` (connector → SQS → worker → Postgres) run against live Adzuna with real `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` — 20 real jobs fetched, normalized, queued, drained, and persisted with no decode/upsert errors (title, company, location, salary, posted_at all populated correctly from the live API).
 
-Builds on Week 1 ([plan/completed/week-1.md](../completed/week-1.md)): the `Connector`/`Registry` types, the Adzuna connector, and the `jobs`/`job_sources` schema already exist and pass `go test ./...`.
+Builds on Week 1 ([plan/completed/week-1.md](week-1.md)): the `Connector`/`Registry` types, the Adzuna connector, and the `jobs`/`job_sources` schema already exist and pass `go test ./...`.
 
-## Design note before starting: what goes on the queue
+## Design note: what goes on the queue
 
-`docs/WEEKLY_PLAN.md` says "connector emits `RawJob` to SQS; worker normalises." But the `Connector` interface (TRD §4.1) already puts `Normalize` on the connector, and Week 1's `cmd/connector/main.go` already calls `registry.Run` → `Fetch` + `Normalize` before printing. If the **worker** re-normalized, it would need to call the Adzuna connector's `Normalize` — but `services/worker` will be its own Go module, and Go's `internal/` visibility is by import-path ancestry, not shared module tree, so `services/worker` cannot import `services/connectors/internal/adzuna` at all.
-
-Decision for this week: keep normalization where it already lives (in the connector), and **publish the normalized `Job` on the queue**, not the raw source payload. The worker's job is queue-drain → `dedup_hash` → upsert, nothing source-specific. This matches the `connector-authoring` skill's existing rule ("map to the unified Job schema... do not compute dedup here") and avoids inventing a shared package just to satisfy the literal word "RawJob." Flagging this here rather than silently editing `docs/TRD.md`'s data-flow wording — worth a one-line TRD update once you sign off.
+`docs/WEEKLY_PLAN.md` originally said "connector emits `RawJob` to SQS; worker normalises." The `Connector` interface already puts `Normalize` on the connector, and `services/worker` cannot import `services/connectors/internal/adzuna`. Normalisation stays in the connector; the queue carries a unified `Job`. The worker only hashes and upserts. TRD §4.1 was updated to match.
 
 ## Day 1 — Queue publishing from the connector
 - `services/connectors/internal/queue/queue.go`: a small `Publisher` interface (`Publish(ctx context.Context, job connector.Job) error`) — keeps the AWS SDK behind a thin adapter (CLAUDE.md golden rule 7 / NFR-2).
@@ -52,7 +55,6 @@ Decision for this week: keep normalization where it already lives (in the connec
 - Buffer day for ElasticMQ/SQS SDK friction — endpoint-style vs path-style addressing, and queue URL differences between ElasticMQ and real SQS are the likeliest snag.
 
 ## Definition of done
-Matches [CLAUDE.md](../../CLAUDE.md)'s checklist — `make test` passes (including the new dedup/idempotency tests), nothing secret is committed, runs fully local via `make up`, no direct HTTP coupling introduced between the connector and worker (they only share the queue and Postgres).
+Matches [CLAUDE.md](../../CLAUDE.md)'s checklist — `make test` passes (including the new dedup/idempotency tests), nothing secret is committed, runs fully local via `make up`, no direct HTTP coupling introduced between the connector and worker (they only share the queue and Postgres). All P0 items satisfied.
 
-## Move to completed
-When the week is done, move this file to `plan/completed/week-2.md` and update `Status:` above.
+Next: [plan/completed/week-3.md](week-3.md). Week 4 is UI + naive scoring.

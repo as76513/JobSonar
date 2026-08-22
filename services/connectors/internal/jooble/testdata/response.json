@@ -1,0 +1,29 @@
+{
+  "totalCount": 2,
+  "jobs": [
+    {
+      "id": 1001,
+      "title": "DevOps Engineer",
+      "location": "Amsterdam",
+      "snippet": "Build CI/CD pipelines and Kubernetes platforms.",
+      "salary": "70000 - 90000 EUR",
+      "source": "example-board",
+      "type": "Full-time",
+      "link": "https://jooble.org/desc/1001",
+      "company": "Example Labs",
+      "updated": "2026-08-01T10:00:00Z"
+    },
+    {
+      "id": 1002,
+      "title": "Platform Engineer (Remote)",
+      "location": "Netherlands",
+      "snippet": "Remote role owning Terraform and AWS.",
+      "salary": "",
+      "source": "example-board",
+      "type": "Full-time",
+      "link": "https://jooble.org/desc/1002",
+      "company": "Cloud Co",
+      "updated": "2026-08-10T12:00:00Z"
+    }
+  ]
+}

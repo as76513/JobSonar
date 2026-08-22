@@ -38,4 +38,4 @@ Shipped as planned, day-by-day, with no deviations from the plan below. `docker-
 ## Definition of done
 Matches [CLAUDE.md](../../CLAUDE.md)'s checklist — `make test` passes, the connector has an isolated fixture test, nothing secret is committed, runs fully local via `make up`. All satisfied.
 
-Next: [plan/active/week-2.md](../active/week-2.md).
+Next: [plan/completed/week-2.md](week-2.md).

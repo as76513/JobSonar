@@ -36,7 +36,8 @@ jobsonar/
 │   │   │   ├── queue/               # SQS publisher — connectors normalise, then publish Job
 │   │   │   ├── adzuna/
 │   │   │   ├── jooble/
-│   │   │   ├── ats/                 # greenhouse, lever, ashby
+│   │   │   ├── companies/           # reads companies table for ATS board tokens
+│   │   │   ├── ats/                 # greenhouse (Week 3); lever/ashby later
 │   │   │   └── scraper/             # optional, disabled by default
 │   │   ├── go.mod
 │   │   └── connector_test.go
