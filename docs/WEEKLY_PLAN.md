@@ -15,18 +15,20 @@ Legend: **P0** = must land this week · **P1** = if time allows.
 - **Demo:** `make up`; running the Adzuna connector prints normalised jobs.
 - **Detail:** [plan/completed/week-1.md](../plan/completed/week-1.md)
 
-### Week 2 — Queue + worker + dedup 🚧 in progress
-- **P0** Connector emits `RawJob` to SQS; **Go worker** drains it, normalises, computes `dedup_hash`, upserts.
+### Week 2 — Queue + worker + dedup ✅ complete
+- **P0** Connector emits normalised `Job` to SQS; **Go worker** drains it, computes `dedup_hash`, upserts.
 - **P0** Dedup property test (same role, two sources → one job, two URLs).
-- **P1** `first_seen`/`last_seen` + closure marking.
+- **P1** `first_seen`/`last_seen` (done via upsert). Closure marking deferred to later ingest cadence.
 - **Demo:** one command ingests Adzuna → deduped rows in Postgres.
-- **Detail:** [plan/active/week-2.md](../plan/active/week-2.md)
+- **Detail:** [plan/completed/week-2.md](../plan/completed/week-2.md)
 
-### Week 3 — More sources + the API skeleton
-- **P0** Add **Jooble** + one **ATS** connector (Greenhouse or Lever) behind the same interface.
+### Week 3 — More sources + the API skeleton ✅ complete
+- **P0** Add **Jooble** + one **ATS** connector (**Greenhouse**) behind the same interface.
 - **P0** Target-company list (`POST /companies`) driving ATS fetches.
 - **P0** Go **Fiber API**: `GET /jobs`, `GET /jobs/{id}`.
 - **Demo:** jobs from 3 source types, deduped, served over REST.
+- **P1 leftover:** Lever connector and stale-job closure deferred.
+- **Detail:** [plan/completed/week-3.md](../plan/completed/week-3.md)
 
 ### Week 4 — UI + naive scoring
 - **P0** React UI: job list + job detail. Deploy as static build (local nginx for now).

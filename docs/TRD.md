@@ -29,6 +29,7 @@ jobs(id pk, dedup_hash unique, source, source_url, title, company, location,
      remote_type, description_md, skills_extracted jsonb, salary_min, salary_max,
      currency, posted_at, first_seen_at, last_seen_at, status)
 job_sources(job_id, source, source_url)           -- many URLs per deduped job
+companies(id pk, name, ats, board_token, created_at)  -- target ATS boards; unique(ats, board_token)
 job_embeddings(job_id, embedding vector(768))
 scores(job_id, profile_id, composite, skill_cov, semantic, seniority_fit,
        location_fit, recency, band, matched_skills jsonb, missing_skills jsonb, scored_at)
