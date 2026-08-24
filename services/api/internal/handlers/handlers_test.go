@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -18,6 +19,9 @@ import (
 type fake struct {
 	jobs      []store.Job
 	companies []store.Company
+	profile   store.Profile
+	apps      []store.Application
+	resumes   []store.Resume
 }
 
 func (f *fake) ListJobs(context.Context) ([]store.Job, error) { return f.jobs, nil }
@@ -39,6 +43,67 @@ func (f *fake) CreateCompany(_ context.Context, name, ats, token string) (store.
 	return c, nil
 }
 
+func (f *fake) GetProfile(context.Context) (store.Profile, error) {
+	if f.profile.Skills == nil {
+		f.profile.Skills = []string{}
+	}
+	return f.profile, nil
+}
+
+func (f *fake) UpsertProfile(_ context.Context, skills []string) (store.Profile, error) {
+	f.profile.Skills = skills
+	f.profile.UpdatedAt = time.Now().UTC()
+	if f.profile.ID == uuid.Nil {
+		f.profile.ID = uuid.New()
+	}
+	return f.profile, nil
+}
+
+func (f *fake) ListApplications(context.Context) ([]store.Application, error) { return f.apps, nil }
+
+func (f *fake) CreateApplication(_ context.Context, jobID uuid.UUID) (store.Application, error) {
+	var job store.Job
+	found := false
+	for _, j := range f.jobs {
+		if j.ID == jobID {
+			job, found = j, true
+			break
+		}
+	}
+	if !found {
+		return store.Application{}, store.ErrNotFound
+	}
+	a := store.Application{
+		ID: uuid.New(), JobID: jobID, Title: job.Title, Company: job.Company,
+		Location: job.Location, SourceURL: job.SourceURL, Status: "saved", CreatedAt: time.Now().UTC(),
+	}
+	f.apps = append(f.apps, a)
+	return a, nil
+}
+
+func (f *fake) CreateResume(_ context.Context, storageURI string) (store.Resume, error) {
+	r := store.Resume{ID: uuid.New(), Status: "pending", CreatedAt: time.Now().UTC(), StorageURI: storageURI}
+	f.resumes = append(f.resumes, r)
+	return r, nil
+}
+
+func (f *fake) LatestResume(context.Context) (store.Resume, error) {
+	if len(f.resumes) == 0 {
+		return store.Resume{}, store.ErrNotFound
+	}
+	return f.resumes[len(f.resumes)-1], nil
+}
+
+func (f *fake) UpdateApplicationStatus(_ context.Context, id uuid.UUID, status string) (store.Application, error) {
+	for i, a := range f.apps {
+		if a.ID == id {
+			f.apps[i].Status = status
+			return f.apps[i], nil
+		}
+	}
+	return store.Application{}, store.ErrNotFound
+}
+
 func setup(t *testing.T, f *fake) *fiber.App {
 	t.Helper()
 	app := fiber.New(fiber.Config{ErrorHandler: func(c *fiber.Ctx, err error) error {
@@ -48,20 +113,24 @@ func setup(t *testing.T, f *fake) *fiber.App {
 		}
 		return c.Status(code).JSON(fiber.Map{"error": err.Error()})
 	}})
-	New(f, f).Mount(app)
+	New(f, f, f, f, f, t.TempDir()).Mount(app)
 	return app
 }
 
 func TestListAndGetJobs(t *testing.T) {
 	id := uuid.MustParse("11111111-1111-1111-1111-111111111111")
-	f := &fake{jobs: []store.Job{{
-		ID: id, Title: "DevOps Engineer", Company: "Example", Location: "Amsterdam",
-		Source: "adzuna", SourceURL: "https://example.test/1", Status: "open",
-		Sources: []store.JobSource{
-			{Source: "adzuna", SourceURL: "https://example.test/1"},
-			{Source: "greenhouse", SourceURL: "https://boards.greenhouse.io/x/jobs/1"},
-		},
-	}}}
+	f := &fake{
+		profile: store.Profile{Skills: []string{"kubernetes", "sales"}},
+		jobs: []store.Job{{
+			ID: id, Title: "DevOps Engineer", Company: "Example", Location: "Amsterdam",
+			Source: "adzuna", SourceURL: "https://example.test/1", Status: "open",
+			DescriptionMD: "Run kubernetes clusters.",
+			Sources: []store.JobSource{
+				{Source: "adzuna", SourceURL: "https://example.test/1"},
+				{Source: "greenhouse", SourceURL: "https://boards.greenhouse.io/x/jobs/1"},
+			},
+		}},
+	}
 	app := setup(t, f)
 
 	resp, err := app.Test(httptest.NewRequest("GET", "/jobs", nil))
@@ -72,12 +141,16 @@ func TestListAndGetJobs(t *testing.T) {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	var listed []store.Job
+	var listed []map[string]any
 	if err := json.Unmarshal(body, &listed); err != nil || len(listed) != 1 {
 		t.Fatalf("list=%s err=%v", body, err)
 	}
-	if len(listed[0].Sources) != 2 {
-		t.Fatalf("want 2 sources, got %+v", listed[0].Sources)
+	score, _ := listed[0]["score"].(map[string]any)
+	if score == nil {
+		t.Fatalf("missing score: %s", body)
+	}
+	if listed[0]["description_md"] != nil && listed[0]["description_md"] != "" {
+		t.Fatal("list should omit description")
 	}
 
 	resp, err = app.Test(httptest.NewRequest("GET", "/jobs/"+id.String(), nil))
@@ -124,5 +197,135 @@ func TestCreateCompany(t *testing.T) {
 	}
 	if resp.StatusCode != 400 {
 		t.Fatalf("lever status=%d", resp.StatusCode)
+	}
+}
+
+func TestApplicationsPipeline(t *testing.T) {
+	jobID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	f := &fake{jobs: []store.Job{{
+		ID: jobID, Title: "DevOps", Company: "Acme", Location: "Pune", SourceURL: "https://x.test",
+	}}}
+	app := setup(t, f)
+
+	req := httptest.NewRequest("POST", "/applications", bytes.NewBufferString(`{"job_id":"`+jobID.String()+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("create status=%d", resp.StatusCode)
+	}
+	var created store.Application
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &created); err != nil || created.Status != "saved" {
+		t.Fatalf("%s", body)
+	}
+
+	patch := httptest.NewRequest("PATCH", "/applications/"+created.ID.String(), bytes.NewBufferString(`{"status":"applied"}`))
+	patch.Header.Set("Content-Type", "application/json")
+	resp, err = app.Test(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("patch status=%d", resp.StatusCode)
+	}
+
+	bad := httptest.NewRequest("PATCH", "/applications/"+created.ID.String(), bytes.NewBufferString(`{"status":"ghosted"}`))
+	bad.Header.Set("Content-Type", "application/json")
+	resp, err = app.Test(bad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("ghosted status=%d", resp.StatusCode)
+	}
+}
+
+func ptr(f float64) *float64 { return &f }
+
+func TestListRanksByKeywordCoverage(t *testing.T) {
+	highKW := store.Job{
+		ID: uuid.MustParse("33333333-3333-3333-3333-333333333333"),
+		Title: "Sales Lead", Company: "Acme", Location: "Pune",
+		DescriptionMD: "kubernetes terraform aws docker linux python go devops",
+		Semantic:      ptr(0.20),
+	}
+	highSem := store.Job{
+		ID: uuid.MustParse("44444444-4444-4444-4444-444444444444"),
+		Title: "Platform Engineer", Company: "Acme", Location: "Pune",
+		DescriptionMD: "people leadership",
+		Semantic:      ptr(0.91),
+	}
+	f := &fake{
+		profile: store.Profile{Skills: []string{"kubernetes", "terraform", "aws", "docker"}},
+		jobs:    []store.Job{highSem, highKW},
+	}
+	app := setup(t, f)
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/jobs", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var listed []map[string]any
+	if err := json.Unmarshal(body, &listed); err != nil || len(listed) != 2 {
+		t.Fatalf("%s", body)
+	}
+	if listed[0]["id"] != highKW.ID.String() {
+		t.Fatalf("want skill-coverage winner first, got %s", body)
+	}
+}
+
+func TestUploadResume(t *testing.T) {
+	f := &fake{}
+	app := setup(t, f)
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("file", "resume.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte("%PDF-1.4 fake"))
+	_ = w.Close()
+	req := httptest.NewRequest("POST", "/profile/resume", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 202 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d %s", resp.StatusCode, body)
+	}
+	if len(f.resumes) != 1 || f.resumes[0].Status != "pending" {
+		t.Fatalf("%+v", f.resumes)
+	}
+
+	bad := httptest.NewRequest("POST", "/profile/resume", bytes.NewBufferString("nope"))
+	bad.Header.Set("Content-Type", "application/json")
+	resp, err = app.Test(bad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("bad status=%d", resp.StatusCode)
+	}
+
+	var txt bytes.Buffer
+	tw := multipart.NewWriter(&txt)
+	part, _ = tw.CreateFormFile("file", "notes.txt")
+	_, _ = part.Write([]byte("hello"))
+	_ = tw.Close()
+	rej := httptest.NewRequest("POST", "/profile/resume", &txt)
+	rej.Header.Set("Content-Type", tw.FormDataContentType())
+	resp, err = app.Test(rej)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("txt status=%d", resp.StatusCode)
 	}
 }
