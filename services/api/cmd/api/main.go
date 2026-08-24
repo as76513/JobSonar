@@ -5,10 +5,12 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 
 	"github.com/as76513/JobSonar/services/api/internal/handlers"
 	"github.com/as76513/JobSonar/services/api/internal/store"
@@ -27,8 +29,17 @@ func main() {
 	}
 	defer db.Close()
 
+	resumeDir, err := filepath.Abs(env("RESUME_DIR", "./data/resumes"))
+	if err != nil {
+		log.Fatalf("resume dir: %v", err)
+	}
+	if err := os.MkdirAll(resumeDir, 0o700); err != nil {
+		log.Fatalf("resume dir: %v", err)
+	}
+
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
+		BodyLimit:             6 << 20,
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
 			if e, ok := err.(*fiber.Error); ok {
@@ -37,7 +48,12 @@ func main() {
 			return c.Status(code).JSON(fiber.Map{"error": err.Error()})
 		},
 	})
-	handlers.New(db, db).Mount(app)
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000",
+		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+		AllowHeaders: "Origin, Content-Type, Accept",
+	}))
+	handlers.New(db, db, db, db, db, resumeDir).Mount(app)
 
 	go func() {
 		log.Printf("api listening on %s", addr)

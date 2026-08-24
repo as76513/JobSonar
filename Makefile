@@ -3,6 +3,9 @@ GOOSE     ?= go run github.com/pressly/goose/v3/cmd/goose@v3.24.3
 CONNECTORS := services/connectors
 WORKER    := services/worker
 API       := services/api
+AGENT     := services/agent
+AGENT_PY  := $(if $(wildcard $(AGENT)/.venv/bin/python),.venv/bin/python,python3)
+WEB       := web
 
 ifneq (,$(wildcard .env))
 include .env
@@ -12,11 +15,14 @@ export ADZUNA_APP_ID ADZUNA_APP_KEY ADZUNA_COUNTRY ADZUNA_WHAT ADZUNA_WHERE
 export JOOBLE_API_KEY JOOBLE_BASE_URL API_ADDR
 export POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB POSTGRES_DSN POSTGRES_PORT
 export SQS_ENDPOINT_URL SQS_QUEUE_URL AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+export OLLAMA_HOST EMBED_MODEL EMBED_BACKEND
+RESUME_DIR ?= $(CURDIR)/data/resumes
+export RESUME_DIR
 
 POSTGRES_DSN ?= postgres://jobsonar:jobsonar@localhost:5432/jobsonar?sslmode=disable
 LIMIT        ?= 20
 
-.PHONY: up down migrate seed test connector publish worker ingest api demo wait-db show-jobs show jobs
+.PHONY: up down migrate seed test connector publish worker ingest api web web-build demo wait-db show-jobs show jobs agent embed ollama-pull agent-install
 
 up:
 	$(COMPOSE) up -d
@@ -38,14 +44,37 @@ migrate: wait-db
 
 seed: wait-db
 	$(COMPOSE) exec -T postgres psql -U $${POSTGRES_USER:-jobsonar} -d $${POSTGRES_DB:-jobsonar} -f - < db/seed/greenhouse.sql
+	$(COMPOSE) exec -T postgres psql -U $${POSTGRES_USER:-jobsonar} -d $${POSTGRES_DB:-jobsonar} -f - < db/seed/profile.sql
 
 test:
 	cd $(CONNECTORS) && go test ./...
 	cd $(WORKER) && go test ./...
 	cd $(API) && go test ./...
+	cd $(AGENT) && PYTHONPATH=. $(AGENT_PY) -m pytest -q
 
 api:
 	cd $(API) && go run ./cmd/api
+
+web:
+	cd $(WEB) && npm install && npm run dev
+
+web-build:
+	cd $(WEB) && npm install && npm run build
+
+agent-install:
+	cd $(AGENT) && (command -v python3.11 >/dev/null && python3.11 || python3) -m venv .venv && .venv/bin/python -m pip install -U pip setuptools && .venv/bin/pip install -e ".[dev]"
+
+# Long-running parse/embed loop (Postgres only; no HTTP to the API).
+# EMBED_BACKEND=fake when Ollama has no nomic-embed-text model.
+agent:
+	cd $(AGENT) && PYTHONPATH=. $(AGENT_PY) -m jobsonar_agent
+
+# One drain-and-exit pass: pending resumes, missing profile/job vectors.
+embed:
+	cd $(AGENT) && PYTHONPATH=. $(AGENT_PY) -m jobsonar_agent --once
+
+ollama-pull:
+	$(COMPOSE) exec -T ollama ollama pull nomic-embed-text
 
 connector:
 	cd $(CONNECTORS) && go run ./cmd/connector

@@ -47,6 +47,8 @@ Build in two vertical stripes. **Stripe one** is the boring-but-real data path �
 - ✅ **Week 1** — Foundations & one connector. See [`plan/completed/week-1.md`](plan/completed/week-1.md).
 - ✅ **Week 2** — Queue + worker + dedup. See [`plan/completed/week-2.md`](plan/completed/week-2.md).
 - ✅ **Week 3** — Jooble + Greenhouse + Fiber API. See [`plan/completed/week-3.md`](plan/completed/week-3.md).
+- ✅ **Week 4** — UI, keyword score, application tracker. See [`plan/completed/week-4.md`](plan/completed/week-4.md).
+- ✅ **Week 5** — Resume parse + local embeddings. See [`plan/completed/week-5.md`](plan/completed/week-5.md).
 - Full roadmap: [`docs/WEEKLY_PLAN.md`](docs/WEEKLY_PLAN.md).
 
 ---

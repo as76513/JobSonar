@@ -30,21 +30,25 @@ Legend: **P0** = must land this week · **P1** = if time allows.
 - **P1 leftover:** Lever connector and stale-job closure deferred.
 - **Detail:** [plan/completed/week-3.md](../plan/completed/week-3.md)
 
-### Week 4 — UI + naive scoring
+### Week 4 — UI + naive scoring ✅ complete
 - **P0** React UI: job list + job detail. Deploy as static build (local nginx for now).
 - **P0** A **dumb keyword score** (skill overlap only) so the list ranks.
 - **P0** Application tracking: `applications` + `application_events`, Kanban board (saved → applied → … → closed).
-- **Demo (Stripe one complete):** browse ranked jobs, move one through the pipeline — all local, no AI, no cloud.
+- **Demo (Stripe one complete / M1):** browse ranked jobs, move one through the pipeline — all local, no AI, no cloud.
+- **P1 leftover:** Lever connector and stale-job closure still deferred (Week 3).
+- **Detail:** [plan/completed/week-4.md](../plan/completed/week-4.md)
 
 ---
 
 ## Phase 2 — The AI agent (Stripe two)
 
-### Week 5 — Embeddings + resume parsing
-- **P0** Python `agent` service; `Embedder` protocol + **local model** (bge/nomic via Ollama).
+### Week 5 — Embeddings + resume parsing ✅ complete
+- **P0** Python `agent` service; `Embedder` protocol + **local model** (nomic via Ollama, `fake` backend when the model is missing).
 - **P0** Resume upload → parse → structured profile (`profiles` table) + profile embedding.
-- **P0** `job_embeddings` populated; pgvector similarity query working.
-- **Demo:** upload resume → semantic similarity ranks jobs better than keywords.
+- **P0** `job_embeddings` populated; pgvector cosine on `GET /jobs` as `score.semantic` (tiebreak; headline rank is job-ask skill coverage).
+- **Demo:** upload resume → agent parse + embed → list shows coverage % and similarity chip.
+- **P1 leftover:** live `nomic-embed-text` pull inside Rancher Desktop can fail TLS on corp MITM — `EMBED_BACKEND=fake` is the local workaround.
+- **Detail:** [plan/completed/week-5.md](../plan/completed/week-5.md)
 
 ### Week 6 — Explainable sub-scores + hard gates
 - **P0** Composite score from named sub-scores: skill coverage, semantic, seniority, location, recency.

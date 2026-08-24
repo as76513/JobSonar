@@ -1,0 +1,7 @@
+Amol Shinde
+DevOps / DevSecOps Lead — Pune
+
+Skills: Kubernetes, Terraform, AWS, Azure, Docker, Linux, Python, Go, CI/CD,
+Helm, Prometheus, Grafana, GitHub Actions, EKS, IAM, Observability.
+
+Experience building platform and SRE tooling. On-call for production incidents.

@@ -23,14 +23,15 @@ Hybrid: managed AWS services for stateful/security-heavy plumbing; self-hosted G
 ## 3. Data model (core tables)
 
 ```
-profiles(id, seeker_id, skills jsonb, seniority, location, remote_pref, comp_floor, embedding vector(768), updated_at)
-resumes(id, seeker_id, variant_name, storage_uri, parsed jsonb, created_at)
+profiles(id pk, skills jsonb, seniority, location, remote_pref, comp_floor, embedding vector(768), updated_at)  -- Week 5: skills + local embedding
+
+resumes(id, variant_name, storage_uri, parsed jsonb, status, error, created_at)  -- pending/done/error; no raw text in parsed
 jobs(id pk, dedup_hash unique, source, source_url, title, company, location,
      remote_type, description_md, skills_extracted jsonb, salary_min, salary_max,
      currency, posted_at, first_seen_at, last_seen_at, status)
 job_sources(job_id, source, source_url)           -- many URLs per deduped job
 companies(id pk, name, ats, board_token, created_at)  -- target ATS boards; unique(ats, board_token)
-job_embeddings(job_id, embedding vector(768))
+job_embeddings(job_id, embedding vector(768), model, updated_at)
 scores(job_id, profile_id, composite, skill_cov, semantic, seniority_fit,
        location_fit, recency, band, matched_skills jsonb, missing_skills jsonb, scored_at)
 analyses(job_id, profile_id, justification_md, tailoring_md, model, created_at)  -- shortlist only
@@ -72,10 +73,13 @@ Implementations: `OllamaLLM`, `BedrockLLM`, `LocalEmbedder`, `BedrockEmbedder`. 
 ### 4.3 Key REST endpoints (Go API)
 
 ```
-POST /profile            upload+parse resume, return profile
-GET  /jobs?band=strong   list scored jobs with sub-scores
-GET  /jobs/{id}          job detail + analysis + matched/missing skills
-POST /applications       create application (records resume variant)
+GET  /profile            skill list + has_embedding + latest resume status
+PUT  /profile            replace skill list (clears embedding until next agent pass)
+POST /profile/resume     store PDF/DOCX as pending; Python agent parses (no Go parse)
+GET  /jobs               rank by skill coverage (job-ask overlap); semantic cosine as tiebreak when embeddings exist (?band= Week 6)
+GET  /jobs/{id}          job detail + matched / job-ask gaps + optional score.semantic
+GET  /applications       tracker rows
+POST /applications       create application (default status saved)
 PATCH /applications/{id} change status (appends event)
 GET  /analytics/funnel   conversion funnel data
 POST /companies          add target company to ATS list
