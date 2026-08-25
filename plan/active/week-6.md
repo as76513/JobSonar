@@ -20,9 +20,10 @@ Also missing today, needed for gates: `profiles` has only `skills` and `embeddin
 - `db/migrations/0006_profile_preferences.sql`: add `seniority text`, `location text`, `remote_pref text`, and `must_have_skills jsonb default '[]'` to `profiles`. All nullable/empty-default — an unset preference means that gate doesn't filter anything, so the current demo profile (which has none of these) keeps working.
 - Update `docs/TRD.md` §3 in the same change (schema-change rule in `CLAUDE.md`).
 
-## Day 2 — Skill coverage + extraction, in Python
-- `services/agent/jobsonar_agent/score/lexicon.py`: port the ~60-term skill lexicon from `services/api/internal/score/lexicon.go` into Python — deliberately duplicated (Go and Python are separate runtimes; this mirrors the connector/worker `Job` duplication pattern from Week 2), not shared.
-- `services/agent/jobsonar_agent/score/skill_coverage.py`: extract `skills_extracted` for a job from title+description via the lexicon (write it back to `jobs.skills_extracted`, once, so it's a persisted explainable fact, not a re-derived one), then `skill_cov = |matched ∩ profile.skills| / |skills_extracted|`, plus `matched_skills`/`missing_skills` lists. This is a straight port of `keyword.go`'s existing logic, not a new algorithm.
+## Day 2 — Skill coverage + extraction, in Python ✅ done
+- No lexicon port needed: `jobsonar_agent.resume.parse.extract_skills()` already exists (Week 5, for resumes) and already implements the identical normalize+substring-match semantics as the Go `Extract()` it was documented to mirror (`services/api/internal/score/lexicon.go:3-5` says as much). `services/agent/jobsonar_agent/score/skill_coverage.py` reuses it directly for job-side extraction instead of adding a second lexicon.
+- `skill_coverage.py`: `extract_job_skills(title, description_md)` + `coverage(profile_skills, job_skills) -> (skill_cov, matched, missing)` — same semantics as `keyword.go`'s `Overlap`. Writing `skills_extracted` back to the `jobs` row happens when this is wired into the scoring pass (Day 5), not here.
+- `services/agent/tests/test_score_skill_coverage.py`: ports every case from `services/api/internal/score/keyword_test.go` verbatim (same fixtures) so the Go implementation being deleted (Day 6) and its Python replacement provably agree, not just "should."
 
 ## Day 3 — Seniority, location, recency sub-scores + composite
 - `score/seniority.py`: infer a job's seniority band from title keywords (junior/mid/senior/lead/staff/principal — same style of heuristic as the existing lexicon matching); `seniority_fit` = 1.0 if it matches `profile.seniority` (or unset), a partial score for adjacent bands, 0 for a clear mismatch.
