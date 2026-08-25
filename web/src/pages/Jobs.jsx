@@ -13,19 +13,18 @@ function snapshot(jobs) {
     id: top.id,
     title: top.title,
     company: top.company,
-    mode: top.score?.semantic != null ? "semantic" : "keyword",
-    score: top.score?.semantic ?? top.score?.coverage ?? 0,
+    band: top.score?.band ?? null,
+    score: top.score?.composite ?? 0,
   };
 }
 
 function pipeline(profile, jobs, phase) {
   const resume = profile?.latest_resume;
-  const semantic = (jobs || []).some((j) => j.score?.semantic != null);
+  const scored = (jobs || []).some((j) => j.score != null);
   const stored = Boolean(resume) || phase === "uploading" || phase === "waiting";
   const parsed = resume?.status === "done";
   const failed = resume?.status === "error";
   const embedded = Boolean(profile?.has_embedding);
-  const ranked = parsed && embedded && semantic;
   return [
     {
       id: "stored",
@@ -46,14 +45,14 @@ function pipeline(profile, jobs, phase) {
     {
       id: "embedded",
       label: "Profile embedded",
-      hint: embedded ? "Vector ready for similarity search" : "Same agent pass writes the profile vector",
+      hint: embedded ? "Vector ready for the semantic sub-score" : "Same agent pass writes the profile vector",
       state: embedded ? "done" : parsed ? "active" : "todo",
     },
     {
-      id: "ranked",
-      label: "Jobs re-ranked",
-      hint: ranked ? "List ordered by semantic similarity" : "Falls back to keyword overlap until vectors exist",
-      state: ranked ? "done" : embedded ? "active" : "todo",
+      id: "scored",
+      label: "Jobs scored",
+      hint: scored ? "List ordered by composite score (skill coverage, semantic, seniority, location, recency)" : "Agent's scoring pass hasn't run against this profile yet",
+      state: scored ? "done" : embedded ? "active" : "todo",
     },
   ];
 }
@@ -100,16 +99,16 @@ export default function Jobs() {
           setNotice("");
           return;
         }
-        const ranked = st === "done" && p.has_embedding && nextJobs.some((j) => j.score?.semantic != null);
-        if (ranked) {
+        const scored = st === "done" && p.has_embedding && nextJobs.some((j) => j.score != null);
+        if (scored) {
           const before = beforeRef.current;
           const after = snapshot(nextJobs);
           if (before && after && before.id !== after.id) {
             setNotice(
-              `Matching updated. Was “${before.title}” (${before.mode} ${pct(before.score)}). Now “${after.title}” (semantic ${pct(after.score)}).`,
+              `Matching updated. Was “${before.title}” (${before.band || "unscored"}). Now “${after.title}” (${after.band || "unscored"} ${pct(after.score)}).`,
             );
           } else {
-            setNotice("Matching updated from this resume. List is ranked by semantic similarity.");
+            setNotice("Matching updated from this resume. List is ranked by composite score.");
           }
           setPhase("idle");
           return;
@@ -140,7 +139,7 @@ export default function Jobs() {
       const list = skills.split(",").map((s) => s.trim()).filter(Boolean);
       await api.saveProfile(list);
       await refresh();
-      setNotice("Skill list saved. Keyword rank updated; semantic rank waits until the next embed pass.");
+      setNotice("Skill list saved. Re-scoring waits until the next agent pass (make embed or make agent).");
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -167,7 +166,7 @@ export default function Jobs() {
   }
 
   const steps = pipeline(profile, jobs, phase);
-  const semantic = jobs.some((j) => j.score?.semantic != null);
+  const scored = jobs.some((j) => j.score != null);
   const busy = phase === "uploading" || phase === "waiting";
 
   return (
@@ -178,9 +177,9 @@ export default function Jobs() {
           <p>
             {phase === "uploading" && "Uploading resume…"}
             {phase === "waiting" && "Waiting for the local agent to parse and embed. The job list refreshes when that finishes."}
-            {phase === "idle" && (semantic
-              ? "Match % is skill overlap from the resume. Similarity is a secondary signal, not the headline score."
-              : "Match % is skill overlap. Upload a resume to refresh the skill list.")}
+            {phase === "idle" && (scored
+              ? "Match % is a composite of skill coverage, semantic similarity, seniority, location, and recency — with a strong/possible/stretch band."
+              : "Not scored yet. Upload a resume, or run the agent, to see match scores.")}
           </p>
         </div>
         <ol>
@@ -212,22 +211,23 @@ export default function Jobs() {
       </div>
       {err && <p className="err">{err}</p>}
       <p className="meta">
-        {jobs.length} jobs · ranked by skill overlap
+        {jobs.length} jobs · ranked by composite score
         {busy ? " · watching for agent…" : ""}
       </p>
       <ul className="cards">
         {jobs.map((j) => {
-          const match = j.score?.coverage || 0;
+          const band = j.score?.band || "unscored";
           return (
             <li key={j.id}>
               <Link to={`/jobs/${j.id}`} className="card">
-                <div className="score" data-band={match >= 0.5 ? "high" : match >= 0.25 ? "mid" : "low"}>
-                  {pct(match)}
+                <div className="score" data-band={band}>
+                  {j.score ? pct(j.score.composite) : "…"}
                 </div>
                 <div>
                   <h2>{j.title}</h2>
                   <p>{j.company} · {j.location || "—"} · {j.source}</p>
                   <p className="chips">
+                    {j.score && <span className="pipe">{band}</span>}
                     {j.score?.semantic != null && <span className="pipe">sim {pct(j.score.semantic)}</span>}
                     {(j.score?.matched_skills || []).slice(0, 6).map((s) => <span key={s}>{s}</span>)}
                     {j.application && <span className="pipe">{j.application.status}</span>}

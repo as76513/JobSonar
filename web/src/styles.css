@@ -93,9 +93,11 @@ button, .btn { padding: 0.55rem 0.9rem; cursor: pointer; background: var(--accen
 .card h2 { margin: 0 0 0.25rem; font-size: 1.05rem; color: var(--ink); }
 .card p { margin: 0; color: var(--muted); font-size: 0.9rem; }
 .score { display: grid; place-items: center; font-weight: 700; border-radius: 10px; background: #10261f; }
-.score[data-band="high"] { color: var(--high); }
-.score[data-band="mid"] { color: var(--mid); }
-.score[data-band="low"] { color: var(--low); }
+.score[data-band="strong"] { color: var(--high); }
+.score[data-band="possible"] { color: var(--mid); }
+.score[data-band="stretch"] { color: var(--low); }
+.score[data-band="excluded"] { color: var(--danger); }
+.score[data-band="unscored"] { color: var(--muted); }
 .score.big { width: 4.5rem; height: 4.5rem; font-size: 1.2rem; }
 .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.45rem !important; }
 .chips span { font-size: 0.72rem; padding: 0.1rem 0.4rem; border-radius: 999px; background: #243f35; color: var(--accent); }

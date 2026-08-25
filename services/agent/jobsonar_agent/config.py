@@ -16,3 +16,4 @@ EMBED_DIM = int(env("EMBED_DIM", "768"))
 EMBED_BATCH = int(env("EMBED_BATCH", "16"))
 EMBED_BACKEND = env("EMBED_BACKEND", "ollama")  # ollama | fake
 OTEL_CONSOLE = env("OTEL_CONSOLE", "") == "1"
+SCORE_BATCH = int(env("SCORE_BATCH", "16"))

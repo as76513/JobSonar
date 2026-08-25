@@ -129,6 +129,10 @@ func TestListAndGetJobs(t *testing.T) {
 				{Source: "adzuna", SourceURL: "https://example.test/1"},
 				{Source: "greenhouse", SourceURL: "https://boards.greenhouse.io/x/jobs/1"},
 			},
+			Score: &store.Score{
+				Composite: 0.8, SkillCov: 1, SeniorityFit: 1, LocationFit: 1, Recency: 1,
+				Band: "strong", MatchedSkills: []string{"kubernetes"}, MissingSkills: []string{},
+			},
 		}},
 	}
 	app := setup(t, f)
@@ -146,8 +150,8 @@ func TestListAndGetJobs(t *testing.T) {
 		t.Fatalf("list=%s err=%v", body, err)
 	}
 	score, _ := listed[0]["score"].(map[string]any)
-	if score == nil {
-		t.Fatalf("missing score: %s", body)
+	if score == nil || score["band"] != "strong" {
+		t.Fatalf("want score.band=strong (passed through from the store, not recomputed): %s", body)
 	}
 	if listed[0]["description_md"] != nil && listed[0]["description_md"] != "" {
 		t.Fatal("list should omit description")
@@ -243,25 +247,26 @@ func TestApplicationsPipeline(t *testing.T) {
 	}
 }
 
-func ptr(f float64) *float64 { return &f }
-
-func TestListRanksByKeywordCoverage(t *testing.T) {
-	highKW := store.Job{
+// Week 6: ranking moved entirely into store.ListJobs's SQL (ORDER BY
+// composite, tested live against Postgres in
+// internal/store/scores_test.go). The handler must not re-sort or
+// otherwise second-guess the order the store returns.
+func TestListPreservesStoreOrder(t *testing.T) {
+	second := store.Job{
 		ID: uuid.MustParse("33333333-3333-3333-3333-333333333333"),
 		Title: "Sales Lead", Company: "Acme", Location: "Pune",
-		DescriptionMD: "kubernetes terraform aws docker linux python go devops",
-		Semantic:      ptr(0.20),
+		Score: &store.Score{Composite: 0.2, Band: "stretch"},
 	}
-	highSem := store.Job{
+	first := store.Job{
 		ID: uuid.MustParse("44444444-4444-4444-4444-444444444444"),
 		Title: "Platform Engineer", Company: "Acme", Location: "Pune",
-		DescriptionMD: "people leadership",
-		Semantic:      ptr(0.91),
+		Score: &store.Score{Composite: 0.9, Band: "strong"},
 	}
-	f := &fake{
-		profile: store.Profile{Skills: []string{"kubernetes", "terraform", "aws", "docker"}},
-		jobs:    []store.Job{highSem, highKW},
-	}
+	// Deliberately fed in store order (first, second), not sorted by the
+	// handler -- if the handler re-sorted, this order would still come
+	// out right, so what this actually proves is that it doesn't invert
+	// or otherwise touch it.
+	f := &fake{jobs: []store.Job{first, second}}
 	app := setup(t, f)
 
 	resp, err := app.Test(httptest.NewRequest("GET", "/jobs", nil))
@@ -273,8 +278,8 @@ func TestListRanksByKeywordCoverage(t *testing.T) {
 	if err := json.Unmarshal(body, &listed); err != nil || len(listed) != 2 {
 		t.Fatalf("%s", body)
 	}
-	if listed[0]["id"] != highKW.ID.String() {
-		t.Fatalf("want skill-coverage winner first, got %s", body)
+	if listed[0]["id"] != first.ID.String() || listed[1]["id"] != second.ID.String() {
+		t.Fatalf("want store order preserved (first, second), got %s", body)
 	}
 }
 

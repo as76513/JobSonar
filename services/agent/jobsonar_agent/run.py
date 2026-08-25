@@ -10,6 +10,11 @@ from jobsonar_agent.embed.ollama import OllamaEmbedder
 from jobsonar_agent.llm import Embedder
 from jobsonar_agent.otel import tracer
 from jobsonar_agent.resume.parse import parse_resume
+from jobsonar_agent.score.composite import band, composite
+from jobsonar_agent.score.location import fit as location_fit
+from jobsonar_agent.score.recency import fit as recency_fit
+from jobsonar_agent.score.seniority import fit as seniority_fit
+from jobsonar_agent.score.skill_coverage import coverage, extract_job_skills
 from jobsonar_agent.store import Store
 
 log = logging.getLogger("jobsonar.agent")
@@ -80,6 +85,45 @@ def embed_jobs(store: Store, embedder: Embedder) -> int:
     return total
 
 
+def score_jobs(store: Store) -> int:
+    """Week 6: composite + named sub-scores for every job missing/stale a
+    scores row, against the current profile. Hard gates are evaluated by
+    Store.upsert_score's SQL, not here -- this function only computes the
+    continuous, explainable sub-scores and hands them off."""
+    profile = store.current_profile()
+    if not profile:
+        return 0
+    total = 0
+    while True:
+        batch = store.jobs_for_scoring(profile["id"], config.SCORE_BATCH)
+        if not batch:
+            break
+        for j in batch:
+            job_skills = extract_job_skills(j["title"] or "", j["description_md"] or "")
+            store.set_job_skills_extracted(j["id"], job_skills)
+            skill_cov, matched, missing = coverage(profile["skills"], job_skills)
+            sen_fit = seniority_fit(profile["seniority"], j["title"] or "")
+            loc_fit = location_fit(profile["location"], profile["remote_pref"], j["location"] or "", j["remote_type"] or "")
+            rec = recency_fit(j["posted_at"], j["first_seen_at"])
+            comp = composite(skill_cov, j["semantic"], sen_fit, loc_fit, rec)
+            store.upsert_score(
+                j["id"],
+                profile["id"],
+                composite=comp,
+                skill_cov=skill_cov,
+                semantic=j["semantic"],
+                seniority_fit=sen_fit,
+                location_fit=loc_fit,
+                recency=rec,
+                band=band(comp),
+                matched_skills=matched,
+                missing_skills=missing,
+            )
+        total += len(batch)
+        log.info("scored %d jobs (batch)", len(batch))
+    return total
+
+
 def once(store: Store | None = None, embedder: Embedder | None = None) -> dict[str, int]:
     store = store or Store()
     if embedder is None:
@@ -88,7 +132,8 @@ def once(store: Store | None = None, embedder: Embedder | None = None) -> dict[s
         parsed = parse_pending(store, embedder)
         profiles = embed_profiles(store, embedder)
         jobs = embed_jobs(store, embedder)
-    return {"resumes": parsed, "profiles": profiles, "jobs": jobs}
+        scored = score_jobs(store)
+    return {"resumes": parsed, "profiles": profiles, "jobs": jobs, "scored": scored}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -98,7 +143,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.once:
         counts = once()
-        log.info("done resumes=%s profiles=%s jobs=%s", counts["resumes"], counts["profiles"], counts["jobs"])
+        log.info(
+            "done resumes=%s profiles=%s jobs=%s scored=%s",
+            counts["resumes"], counts["profiles"], counts["jobs"], counts["scored"],
+        )
         return 0
     while True:
         try:
