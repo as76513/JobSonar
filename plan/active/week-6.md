@@ -38,9 +38,10 @@ Also missing today, needed for gates: `profiles` has only `skills` and `embeddin
 - `services/agent/tests/test_store_gates.py`: 6 tests against a **live Postgres** (skips if unreachable — gated on an actual connection attempt, not merely `POSTGRES_DSN` being set, learning from the SQS-integration-test mistake fixed earlier this project). Proves, concretely: a deliberately high composite (0.99) + perfect semantic (1.0) still gets excluded on a seniority mismatch — the gate cannot be talked past by a good score (FRD FR-12).
 - Nothing in this week touches an LLM at all; that's Week 7.
 
-## Day 5 — Wire the scoring pass + golden test
-- Extend `services/agent/jobsonar_agent/run.py`'s existing loop (same cadence as the Week 5 embed pass) to also score any `(job, profile)` pair missing a `scores` row, or whose `jobs.last_seen_at`/`profiles.updated_at` moved since `scored_at`.
-- `services/agent/tests/test_scoring_golden.py`: a fixed resume + fixed job fixture → expected sub-scores within tolerance, per the `scoring-model` skill's mandatory rule. Add/update this test with every future sub-score change, not just this week.
+## Day 5 — Wire the scoring pass + golden test ✅ done
+- `run.score_jobs()`: same shape as `embed_jobs` — drains `store.jobs_for_scoring()` (missing/stale a `scores` row) in `SCORE_BATCH` batches, computes all four sub-scores + composite + band, writes `skills_extracted` and the `scores` row. Wired into `once()` alongside the existing parse/embed passes.
+- `services/agent/tests/test_scoring_golden.py`: fixed resume (5 skills) + fixed job fixture → exact expected `skill_cov` (5/7), `seniority_fit` (1.0), `location_fit` (1.0), `recency` (0.5 at half the window), and `composite`/`band`, all within tolerance — matches the filename `docs/PROJECT_STRUCTURE.md` already reserved for this.
+- **Verified against real data, not just fixtures**: restarted the live `make agent` process, it scored all 54 ingested jobs against the real (user-uploaded, 30-skill) profile — 36 strong / 8 possible / 10 stretch. Spot-checked: "Senior Java Developer" correctly landed `skill_cov=0`, `missing_skills=["java"]`, `stretch`; top "strong" jobs all had `skill_cov=1`, `location_fit=1` (Pune match), `seniority_fit=1` (no seniority preference set yet — neutral).
 
 ## Day 6 — API reads from `scores`
 - `services/api`: `GET /jobs` and `GET /jobs/{id}` join `scores` instead of calling `score.Overlap()`; response includes the named sub-scores, `band`, and `matched_skills`/`missing_skills` from the table.

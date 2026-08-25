@@ -132,6 +132,32 @@ class Store:
                 for r in cur.fetchall()
             ]
 
+    def current_profile(self) -> dict | None:
+        """The single profile this project targets (CLAUDE.md: single-user).
+        Same "most recently updated" selection as upsert_skills/upsert_profile."""
+        with self.connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id::text, skills, seniority, location, remote_pref
+                FROM profiles
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            rid, skills, seniority, location, remote_pref = row
+            if isinstance(skills, str):
+                skills = json.loads(skills)
+            return {
+                "id": rid,
+                "skills": skills or [],
+                "seniority": seniority,
+                "location": location,
+                "remote_pref": remote_pref,
+            }
+
     def jobs_for_scoring(self, profile_id: str, limit: int) -> list[dict]:
         """Jobs missing a scores row, or re-scored since last_seen_at/
         profile.updated_at moved -- same "backfill what's stale" shape as
