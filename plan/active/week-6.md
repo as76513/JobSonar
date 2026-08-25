@@ -1,8 +1,8 @@
 # Week 6 — Explainable sub-scores + hard gates
 
-Status: active
-Branch: (create off `main`, e.g. `week-6`)
-Headline outcome (from [docs/WEEKLY_PLAN.md](../../docs/WEEKLY_PLAN.md#week-6--explainable-sub-scores--hard-gates)): each job shows a score breakdown and a skill gap. Closes milestone **M2 — Explainable matching**.
+Status: all 7 days done and verified live (P1 tunable weights not started)
+Branch: `week-6`
+Headline outcome (from [docs/WEEKLY_PLAN.md](../../docs/WEEKLY_PLAN.md#week-6--explainable-sub-scores--hard-gates)): each job shows a score breakdown and a skill gap. Closes milestone **M2 — Explainable matching**. ✅
 
 ## Design note before starting: scoring moves from Go to Python
 
@@ -51,10 +51,12 @@ Also missing today, needed for gates: `profiles` has only `skills` and `embeddin
 - `GetJob` (unlike `ListJobs`) does **not** filter out `excluded` — Day 4's "never silently dropped" principle: a direct link to a gated job still explains why via `score.band`.
 - Verified live: restarted `make api`, `GET /jobs` now returns real persisted sub-scores/band/matched-missing-skills, ordered correctly, matching the direct-Postgres inspection from Day 5.
 
-## Day 7 — UI, demo, buffer
-- `web/src/pages/Jobs.jsx` / `JobDetail.jsx`: replace the Coverage/Semantic-only display with the full breakdown — composite %, band, and each named sub-score, plus the skill gap (`missing_skills`).
-- **Demo:** open a job, see a score breakdown (five named sub-scores + band) and a skill gap list, sourced from a persisted `scores` row, not a live computation.
-- Buffer for whatever slipped — the Go→Python scoring move (Day 1–2) is the likeliest source of friction, not the sub-score math itself.
+## Day 7 — UI, demo, buffer ✅ done
+- `Jobs.jsx`: cards now show composite % (was `coverage`), a `data-band` badge colored by `strong`/`possible`/`stretch`/`unscored` (was a hardcoded 0.5/0.25 threshold on coverage), and a band-name chip. Pipeline step renamed "Jobs scored" (was "Jobs re-ranked" — that language was semantic-vs-keyword framing that no longer matches: ranking is always by composite now). All "keyword rank vs semantic rank" copy replaced with composite/band language.
+- `JobDetail.jsx`: full breakdown — composite % + band label, then all five named sub-scores as chips (skill coverage, semantic, seniority, location, recency), matched/missing skills. An `excluded` band gets an explicit "excluded by a hard gate" explanation line (Day 4's "never silently dropped" principle, actually surfaced now, not just true in the data).
+- `styles.css`: `.score[data-band]` selectors renamed from generic `high/mid/low` to the real band names, plus `excluded` (danger color) and `unscored` (muted color).
+- **Demo verified live** (Playwright screenshots, not just `npm run build`): Jobs list shows 54 real jobs, correctly banded and colored (green/yellow/red), composite-ordered; clicking into the top job shows "85% · strong match" with all five sub-score chips and matched skills — sourced from the persisted `scores` row end-to-end (Adzuna/Jooble/Greenhouse → worker → agent scoring pass → API → UI).
+- **Bug found, out of Week 6's scope, flagged not fixed**: direct navigation (or a page refresh) to `/jobs/<uuid>` hits the Go API directly instead of the React app — both `web/vite.config.js`'s dev proxy and `web/nginx.conf`'s prod proxy match `/jobs` as a prefix, which also swallows `/jobs/:id`. Pre-existing since Week 4, not a Week 6 regression (only surfaced now because Day 7 needed to actually navigate the app). Normal in-app clicking is unaffected (client-side routing, no server round-trip).
 
 ## P1 (if time allows)
 Tunable weights in the UI — expose `score/composite.py`'s weight dict via a `PATCH /profile/weights`-style endpoint and a simple form, rather than editing Python to change ranking behavior.
