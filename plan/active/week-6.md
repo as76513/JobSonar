@@ -43,10 +43,13 @@ Also missing today, needed for gates: `profiles` has only `skills` and `embeddin
 - `services/agent/tests/test_scoring_golden.py`: fixed resume (5 skills) + fixed job fixture → exact expected `skill_cov` (5/7), `seniority_fit` (1.0), `location_fit` (1.0), `recency` (0.5 at half the window), and `composite`/`band`, all within tolerance — matches the filename `docs/PROJECT_STRUCTURE.md` already reserved for this.
 - **Verified against real data, not just fixtures**: restarted the live `make agent` process, it scored all 54 ingested jobs against the real (user-uploaded, 30-skill) profile — 36 strong / 8 possible / 10 stretch. Spot-checked: "Senior Java Developer" correctly landed `skill_cov=0`, `missing_skills=["java"]`, `stretch`; top "strong" jobs all had `skill_cov=1`, `location_fit=1` (Pune match), `seniority_fit=1` (no seniority preference set yet — neutral).
 
-## Day 6 — API reads from `scores`
-- `services/api`: `GET /jobs` and `GET /jobs/{id}` join `scores` instead of calling `score.Overlap()`; response includes the named sub-scores, `band`, and `matched_skills`/`missing_skills` from the table.
-- Delete `services/api/internal/score/keyword.go` and `lexicon.go` once nothing references them — per CLAUDE.md, no parallel implementation left "just in case."
-- Jobs with no `scores` row yet (freshly ingested, agent hasn't caught up) need a UX state — reuse the existing "waiting on the agent" pattern from Jobs.jsx's resume-upload flow rather than inventing a new one.
+## Day 6 — API reads from `scores` ✅ done
+- `store.Job` gained a `Score *store.Score` field (nil = not yet scored, never "scored zero"); `jobSelect` now joins `scores` via a `LEFT JOIN LATERAL` keyed to the current profile, replacing the old `job_embeddings`/profile-embedding join entirely (semantic now comes pre-computed from `scores.semantic`, written by the agent).
+- **Real bug caught by the new live-DB test** (`scores_test.go`): a `LEFT JOIN LATERAL` with the `band <> 'excluded'` filter *inside* it still returns the outer job row with all-NULL score columns when the filter excludes the only match — `LEFT JOIN` guarantees the outer row survives. The exclusion has to be a `WHERE` clause on the *outer* query (`WHERE sc.band IS DISTINCT FROM 'excluded'`), not inside the lateral. Would have shipped broken (`excluded` jobs still appearing, just unscored-looking) without a test that hits real SQL — the fake-store handler tests could never have caught it.
+- `handlers.go`'s `decorate()`/`scoredJob`/`semOr()` and the Go-side `sort.SliceStable` are all deleted — ranking is 100% `ORDER BY sc.composite DESC NULLS LAST, j.last_seen_at DESC` in `store.go` now; the handler only strips `description_md` for the list view.
+- Deleted `services/api/internal/score/` (`keyword.go`, `lexicon.go`, their tests) entirely — nothing imports it anymore.
+- `GetJob` (unlike `ListJobs`) does **not** filter out `excluded` — Day 4's "never silently dropped" principle: a direct link to a gated job still explains why via `score.band`.
+- Verified live: restarted `make api`, `GET /jobs` now returns real persisted sub-scores/band/matched-missing-skills, ordered correctly, matching the direct-Postgres inspection from Day 5.
 
 ## Day 7 — UI, demo, buffer
 - `web/src/pages/Jobs.jsx` / `JobDetail.jsx`: replace the Coverage/Semantic-only display with the full breakdown — composite %, band, and each named sub-score, plus the skill gap (`missing_skills`).

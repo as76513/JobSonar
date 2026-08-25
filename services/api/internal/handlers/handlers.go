@@ -4,13 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
-	"github.com/as76513/JobSonar/services/api/internal/score"
 	"github.com/as76513/JobSonar/services/api/internal/store"
 )
 
@@ -69,66 +67,21 @@ func (h *Handler) Mount(app *fiber.App) {
 	app.Patch("/applications/:id", h.patchApplication)
 }
 
-type scoredJob struct {
-	store.Job
-	Score score.Keyword `json:"score"`
-}
-
-func (h *Handler) skills(c *fiber.Ctx) []string {
-	if h.profiles == nil {
-		return nil
-	}
-	p, err := h.profiles.GetProfile(c.Context())
-	if err != nil {
-		return nil
-	}
-	return p.Skills
-}
-
-func decorate(j store.Job, skills []string, includeDesc bool) scoredJob {
-	s := score.Overlap(skills, j.Title, j.DescriptionMD)
-	s.Semantic = j.Semantic
-	if !includeDesc {
-		j.DescriptionMD = ""
-	}
-	return scoredJob{Job: j, Score: s}
-}
-
-func semOr(s *float64) float64 {
-	if s == nil {
-		return -1
-	}
-	return *s
-}
+// listJobs and getJob no longer compute anything: ranking and every
+// sub-score come from the `scores` table (Week 6), written by the agent's
+// scoring pass and already ordered by store.ListJobs's SQL. A nil
+// Job.Score means the agent hasn't scored it yet, not that it scored
+// zero -- the web UI's existing "waiting on the agent" state covers that.
 
 func (h *Handler) listJobs(c *fiber.Ctx) error {
 	jobs, err := h.jobs.ListJobs(c.Context())
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
-	skills := h.skills(c)
-	out := make([]scoredJob, 0, len(jobs))
-	useSemantic := false
-	for _, j := range jobs {
-		row := decorate(j, skills, false)
-		if row.Score.Semantic != nil {
-			useSemantic = true
-		}
-		out = append(out, row)
+	for i := range jobs {
+		jobs[i].DescriptionMD = "" // list view omits the description; getJob includes it
 	}
-	sort.SliceStable(out, func(i, k int) bool {
-		if out[i].Score.Coverage != out[k].Score.Coverage {
-			return out[i].Score.Coverage > out[k].Score.Coverage
-		}
-		if useSemantic {
-			si, sk := semOr(out[i].Score.Semantic), semOr(out[k].Score.Semantic)
-			if si != sk {
-				return si > sk
-			}
-		}
-		return out[i].LastSeenAt.After(out[k].LastSeenAt)
-	})
-	return c.JSON(out)
+	return c.JSON(jobs)
 }
 
 func (h *Handler) getJob(c *fiber.Ctx) error {
@@ -143,7 +96,7 @@ func (h *Handler) getJob(c *fiber.Ctx) error {
 		}
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
-	return c.JSON(decorate(job, h.skills(c), true))
+	return c.JSON(job)
 }
 
 type createCompanyReq struct {

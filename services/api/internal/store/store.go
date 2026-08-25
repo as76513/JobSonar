@@ -20,6 +20,23 @@ type JobSource struct {
 	SourceURL string `json:"source_url"`
 }
 
+// Score mirrors one `scores` row (Week 6). Written by the agent's scoring
+// pass (services/agent/jobsonar_agent/run.py:score_jobs); the API only
+// reads it -- see docs/TRD.md §4.1's note on where normalisation/scoring
+// reasoning lives. Nil on a Job means the agent hasn't scored it yet, not
+// that it scored zero.
+type Score struct {
+	Composite     float64  `json:"composite"`
+	SkillCov      float64  `json:"skill_cov"`
+	Semantic      *float64 `json:"semantic,omitempty"`
+	SeniorityFit  float64  `json:"seniority_fit"`
+	LocationFit   float64  `json:"location_fit"`
+	Recency       float64  `json:"recency"`
+	Band          string   `json:"band"`
+	MatchedSkills []string `json:"matched_skills"`
+	MissingSkills []string `json:"missing_skills"`
+}
+
 type Job struct {
 	ID            uuid.UUID   `json:"id"`
 	Title         string      `json:"title"`
@@ -33,7 +50,7 @@ type Job struct {
 	LastSeenAt    time.Time   `json:"last_seen_at"`
 	Sources       []JobSource `json:"sources"`
 	Application   *AppBrief   `json:"application,omitempty"`
-	Semantic      *float64    `json:"-"`
+	Score         *Score      `json:"score,omitempty"`
 }
 
 type AppBrief struct {
@@ -98,17 +115,25 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 
 func (s *Store) Close() { s.pool.Close() }
 
+// currentProfileID names the same "single profile, most recently updated"
+// selection used throughout (upsert_skills/upsert_profile in the agent;
+// the one profile this single-user project targets, per CLAUDE.md).
+const currentProfileID = `(SELECT id FROM profiles ORDER BY updated_at DESC LIMIT 1)`
+
 func (s *Store) ListJobs(ctx context.Context) ([]Job, error) {
 	rows, err := s.pool.Query(ctx, jobSelect+`
 		FROM jobs j
-		LEFT JOIN job_sources s ON s.job_id = j.id
 		LEFT JOIN applications a ON a.job_id = j.id
-		LEFT JOIN job_embeddings e ON e.job_id = j.id
 		LEFT JOIN LATERAL (
-			SELECT embedding FROM profiles ORDER BY updated_at DESC LIMIT 1
-		) p ON true
-		GROUP BY j.id, a.id, a.status
-		ORDER BY j.last_seen_at DESC
+			SELECT COALESCE(json_agg(json_build_object('source', src.source, 'source_url', src.source_url)), '[]') AS sources
+			FROM job_sources src WHERE src.job_id = j.id
+		) srcs ON true
+		LEFT JOIN LATERAL (
+			SELECT * FROM scores sc
+			WHERE sc.job_id = j.id AND sc.profile_id = `+currentProfileID+`
+		) sc ON true
+		WHERE sc.band IS DISTINCT FROM 'excluded'
+		ORDER BY sc.composite DESC NULLS LAST, j.last_seen_at DESC
 	`)
 	if err != nil {
 		return nil, err
@@ -118,16 +143,21 @@ func (s *Store) ListJobs(ctx context.Context) ([]Job, error) {
 }
 
 func (s *Store) GetJob(ctx context.Context, id uuid.UUID) (Job, error) {
+	// Unlike ListJobs, an excluded (hard-gated) score is still returned
+	// here -- a job someone links to directly should explain why it was
+	// excluded, not disappear (Week 6 Day 4: never silently dropped).
 	row := s.pool.QueryRow(ctx, jobSelect+`
 		FROM jobs j
-		LEFT JOIN job_sources s ON s.job_id = j.id
 		LEFT JOIN applications a ON a.job_id = j.id
-		LEFT JOIN job_embeddings e ON e.job_id = j.id
 		LEFT JOIN LATERAL (
-			SELECT embedding FROM profiles ORDER BY updated_at DESC LIMIT 1
-		) p ON true
+			SELECT COALESCE(json_agg(json_build_object('source', src.source, 'source_url', src.source_url)), '[]') AS sources
+			FROM job_sources src WHERE src.job_id = j.id
+		) srcs ON true
+		LEFT JOIN LATERAL (
+			SELECT * FROM scores sc
+			WHERE sc.job_id = j.id AND sc.profile_id = `+currentProfileID+`
+		) sc ON true
 		WHERE j.id = $1
-		GROUP BY j.id, a.id, a.status
 	`, id)
 	j, err := scanJob(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -139,14 +169,10 @@ func (s *Store) GetJob(ctx context.Context, id uuid.UUID) (Job, error) {
 const jobSelect = `
 		SELECT j.id, j.title, j.company, j.location, j.source, j.source_url,
 		       j.description_md, j.posted_at, j.status, j.last_seen_at,
-		       COALESCE(
-		         json_agg(json_build_object('source', s.source, 'source_url', s.source_url))
-		         FILTER (WHERE s.source IS NOT NULL),
-		         '[]'
-		       ),
+		       srcs.sources,
 		       a.id, a.status,
-		       MAX(CASE WHEN p.embedding IS NOT NULL AND e.embedding IS NOT NULL
-		         THEN (1 - (e.embedding <=> p.embedding))::float8 END)
+		       sc.composite, sc.skill_cov, sc.semantic, sc.seniority_fit,
+		       sc.location_fit, sc.recency, sc.band, sc.matched_skills, sc.missing_skills
 `
 
 func (s *Store) CreateCompany(ctx context.Context, name, ats, token string) (Company, error) {
@@ -170,8 +196,13 @@ func scanJob(row rowScanner) (Job, error) {
 	var sources []byte
 	var appID *uuid.UUID
 	var appStatus *string
+	var composite, skillCov, seniorityFit, locationFit, recency *float64
+	var semantic *float64
+	var band *string
+	var matchedRaw, missingRaw []byte
 	if err := row.Scan(&j.ID, &j.Title, &j.Company, &j.Location, &j.Source, &j.SourceURL,
-		&j.DescriptionMD, &posted, &j.Status, &j.LastSeenAt, &sources, &appID, &appStatus, &j.Semantic); err != nil {
+		&j.DescriptionMD, &posted, &j.Status, &j.LastSeenAt, &sources, &appID, &appStatus,
+		&composite, &skillCov, &semantic, &seniorityFit, &locationFit, &recency, &band, &matchedRaw, &missingRaw); err != nil {
 		return Job{}, err
 	}
 	j.PostedAt = posted
@@ -183,6 +214,25 @@ func scanJob(row rowScanner) (Job, error) {
 	}
 	if appID != nil && appStatus != nil {
 		j.Application = &AppBrief{ID: *appID, Status: *appStatus}
+	}
+	if composite != nil && band != nil {
+		sc := &Score{
+			Composite: *composite, SkillCov: *skillCov, Semantic: semantic,
+			SeniorityFit: *seniorityFit, LocationFit: *locationFit, Recency: *recency, Band: *band,
+		}
+		if err := unmarshalJSON(matchedRaw, &sc.MatchedSkills); err != nil {
+			return Job{}, err
+		}
+		if err := unmarshalJSON(missingRaw, &sc.MissingSkills); err != nil {
+			return Job{}, err
+		}
+		if sc.MatchedSkills == nil {
+			sc.MatchedSkills = []string{}
+		}
+		if sc.MissingSkills == nil {
+			sc.MissingSkills = []string{}
+		}
+		j.Score = sc
 	}
 	return j, nil
 }
