@@ -23,7 +23,8 @@ Hybrid: managed AWS services for stateful/security-heavy plumbing; self-hosted G
 ## 3. Data model (core tables)
 
 ```
-profiles(id pk, skills jsonb, seniority, location, remote_pref, comp_floor, embedding vector(768), updated_at)  -- Week 5: skills + local embedding
+profiles(id pk, skills jsonb, embedding vector(768), updated_at,        -- Week 5: skills + local embedding
+         seniority, location, remote_pref, must_have_skills jsonb)     -- Week 6: hard-gate preferences, all optional (comp_floor not yet needed, deferred)
 
 resumes(id, variant_name, storage_uri, parsed jsonb, status, error, created_at)  -- pending/done/error; no raw text in parsed
 jobs(id pk, dedup_hash unique, source, source_url, title, company, location,
@@ -32,8 +33,8 @@ jobs(id pk, dedup_hash unique, source, source_url, title, company, location,
 job_sources(job_id, source, source_url)           -- many URLs per deduped job
 companies(id pk, name, ats, board_token, created_at)  -- target ATS boards; unique(ats, board_token)
 job_embeddings(job_id, embedding vector(768), model, updated_at)
-scores(job_id, profile_id, composite, skill_cov, semantic, seniority_fit,
-       location_fit, recency, band, matched_skills jsonb, missing_skills jsonb, scored_at)
+scores(job_id, profile_id, composite, skill_cov, semantic, seniority_fit,       -- Week 6: written by the agent's scoring
+       location_fit, recency, band, matched_skills jsonb, missing_skills jsonb, scored_at)  -- pass; API only reads this
 analyses(job_id, profile_id, justification_md, tailoring_md, model, created_at)  -- shortlist only
 applications(id, job_id, resume_variant, status, applied_at, notes, contacts jsonb)
 application_events(application_id, from_status, to_status, at)
