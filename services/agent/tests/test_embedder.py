@@ -4,6 +4,7 @@ import pytest
 
 from jobsonar_agent.embed.fake import FakeEmbedder
 from jobsonar_agent.llm import Embedder
+from jobsonar_agent.run import job_text
 
 
 def test_fake_embedder_is_protocol_and_768d():
@@ -25,6 +26,13 @@ def test_fake_embedder_is_protocol_and_768d():
     close = sum(x * y for x, y in zip(profile, devops))
     far = sum(x * y for x, y in zip(profile, sales))
     assert close > far
+
+
+def test_job_text_caps_description(monkeypatch):
+    monkeypatch.setattr("jobsonar_agent.config.EMBED_TEXT_CHARS", 20)
+    out = job_text("SRE", "x" * 200)
+    assert out.startswith("SRE\n")
+    assert len(out) <= len("SRE\n") + 20
 
 
 @pytest.mark.skipif(not os.environ.get("RUN_OLLAMA_EMBED_TEST"), reason="live ollama")

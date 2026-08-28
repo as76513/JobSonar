@@ -7,7 +7,9 @@ import time
 from jobsonar_agent import config
 from jobsonar_agent.embed.fake import FakeEmbedder
 from jobsonar_agent.embed.ollama import OllamaEmbedder
+from jobsonar_agent.graph.cascade import build_graph, run_cascade
 from jobsonar_agent.llm import Embedder
+from jobsonar_agent.llm.factory import resolve_llm
 from jobsonar_agent.otel import tracer
 from jobsonar_agent.resume.parse import parse_resume
 from jobsonar_agent.score.composite import band, composite
@@ -25,7 +27,11 @@ def profile_text(skills: list[str]) -> str:
 
 
 def job_text(title: str, description: str) -> str:
-    return f"{title}\n{description}".strip() or title or "job"
+    # nomic does not need the full posting; cap tokens so a 200-job
+    # backfill is tens of seconds, not minutes.
+    cap = config.EMBED_TEXT_CHARS
+    body = (description or "")[:cap]
+    return f"{title}\n{body}".strip() or title or "job"
 
 
 def parse_pending(store: Store, embedder: Embedder) -> int:
@@ -98,42 +104,79 @@ def score_jobs(store: Store) -> int:
         batch = store.jobs_for_scoring(profile["id"], config.SCORE_BATCH)
         if not batch:
             break
+        prepared = []
         for j in batch:
-            job_skills = extract_job_skills(j["title"] or "", j["description_md"] or "")
-            store.set_job_skills_extracted(j["id"], job_skills)
+            # None = never extracted (re-parse JD). [] = extracted, no hits
+            # — reuse so a rescore does not walk every posting again.
+            if j.get("skills_extracted") is None:
+                job_skills = extract_job_skills(j["title"] or "", j["description_md"] or "")
+                write_skills = True
+            else:
+                job_skills = j.get("skills_extracted") or []
+                write_skills = False
             skill_cov, matched, missing = coverage(profile["skills"], job_skills)
             sen_fit = seniority_fit(profile["seniority"], j["title"] or "")
             loc_fit = location_fit(profile["location"], profile["remote_pref"], j["location"] or "", j["remote_type"] or "")
             rec = recency_fit(j["posted_at"], j["first_seen_at"])
             comp = composite(skill_cov, j["semantic"], sen_fit, loc_fit, rec)
-            store.upsert_score(
-                j["id"],
-                profile["id"],
-                composite=comp,
-                skill_cov=skill_cov,
-                semantic=j["semantic"],
-                seniority_fit=sen_fit,
-                location_fit=loc_fit,
-                recency=rec,
-                band=band(comp),
-                matched_skills=matched,
-                missing_skills=missing,
-            )
+            prepared.append({
+                "job_id": j["id"],
+                "write_skills": write_skills,
+                "skills": job_skills,
+                "composite": comp,
+                "skill_cov": skill_cov,
+                "semantic": j["semantic"],
+                "seniority_fit": sen_fit,
+                "location_fit": loc_fit,
+                "recency": rec,
+                "band": band(comp),
+                "matched_skills": matched,
+                "missing_skills": missing,
+            })
+        store.write_score_batch(profile["id"], prepared)
         total += len(batch)
         log.info("scored %d jobs (batch)", len(batch))
     return total
 
 
-def once(store: Store | None = None, embedder: Embedder | None = None) -> dict[str, int]:
-    store = store or Store()
-    if embedder is None:
-        embedder = FakeEmbedder() if config.EMBED_BACKEND == "fake" else OllamaEmbedder()
-    with tracer().start_as_current_span("agent.pass"):
+def _first_pass(store: Store, embedder: Embedder):
+    def first_pass(_state):
         parsed = parse_pending(store, embedder)
         profiles = embed_profiles(store, embedder)
         jobs = embed_jobs(store, embedder)
         scored = score_jobs(store)
-    return {"resumes": parsed, "profiles": profiles, "jobs": jobs, "scored": scored}
+        return {
+            "first_pass": {
+                "resumes": parsed,
+                "profiles": profiles,
+                "jobs": jobs,
+                "scored": scored,
+            },
+        }
+
+    return first_pass
+
+
+def _counts(result: dict) -> dict[str, int]:
+    fp = result.get("first_pass") or {}
+    return {
+        "resumes": fp.get("resumes", 0),
+        "profiles": fp.get("profiles", 0),
+        "jobs": fp.get("jobs", 0),
+        "scored": fp.get("scored", 0),
+        "deep_dive": len(result.get("prompted_job_ids") or []),
+        "premium_calls": result.get("premium_calls") or 0,
+    }
+
+
+def once(store: Store | None = None, embedder: Embedder | None = None, graph=None) -> dict[str, int]:
+    store = store or Store()
+    if embedder is None:
+        embedder = FakeEmbedder() if config.EMBED_BACKEND == "fake" else OllamaEmbedder()
+    if graph is not None:
+        return _counts(graph.invoke({}))
+    llm = resolve_llm()
+    return _counts(run_cascade(store, llm, _first_pass(store, embedder)))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -141,16 +184,23 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="JobSonar local embed/parse worker")
     parser.add_argument("--once", action="store_true", help="one drain-and-exit pass")
     args = parser.parse_args(argv)
+    store = Store()
+    embedder = FakeEmbedder() if config.EMBED_BACKEND == "fake" else OllamaEmbedder()
+    llm = resolve_llm()
+    # Compile once. Rebuilding LangGraph every 1s loop was wasted work
+    # on the hot path after a resume upload.
+    graph = build_graph(store, llm, _first_pass(store, embedder))
     if args.once:
-        counts = once()
+        counts = once(store, embedder, graph=graph)
         log.info(
-            "done resumes=%s profiles=%s jobs=%s scored=%s",
+            "done resumes=%s profiles=%s jobs=%s scored=%s deep_dive=%s premium=%s",
             counts["resumes"], counts["profiles"], counts["jobs"], counts["scored"],
+            counts.get("deep_dive", 0), counts.get("premium_calls", 0),
         )
         return 0
     while True:
         try:
-            once()
+            once(store, embedder, graph=graph)
         except Exception as exc:
             log.warning("agent pass failed: %s", type(exc).__name__)
         time.sleep(1)

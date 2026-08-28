@@ -31,4 +31,4 @@ Builds on Week 4 ([plan/completed/week-4.md](week-4.md)): keyword rank, tracker 
 
 All P0 items satisfied. Milestone M2 still belongs to Week 6 (explainable composite + hard gates).
 
-Next: Week 6 — explainable sub-scores + hard gates ([docs/WEEKLY_PLAN.md](../../docs/WEEKLY_PLAN.md#week-6--explainable-sub-scores--hard-gates)).
+Next: [plan/completed/week-6.md](week-6.md).

@@ -50,18 +50,20 @@ Legend: **P0** = must land this week · **P1** = if time allows.
 - **P1 leftover:** live `nomic-embed-text` pull inside Rancher Desktop can fail TLS on corp MITM — `EMBED_BACKEND=fake` is the local workaround.
 - **Detail:** [plan/completed/week-5.md](../plan/completed/week-5.md)
 
-### Week 6 — Explainable sub-scores + hard gates
+### Week 6 — Explainable sub-scores + hard gates ✅ complete
 - **P0** Composite score from named sub-scores: skill coverage, semantic, seniority, location, recency.
 - **P0** **Hard gates in SQL** (must-have skills, seniority, location).
 - **P0** Matched vs missing skills lists; confidence bands; **golden scoring test**.
-- **P1** Tunable weights in the UI.
+- **P1 leftover:** tunable weights in the UI.
 - **Demo:** each job shows a score breakdown and a skill gap.
+- **Detail:** [plan/completed/week-6.md](../plan/completed/week-6.md)
 
-### Week 7 — Tiered deep dive
+### Week 7 — Tiered deep dive 🚧 in progress
 - **P0** LangGraph graph: `first_pass (local) → shortlist → deep_dive (Bedrock or local)` behind the `LLM` abstraction.
 - **P0** Deep dive writes `analyses` (justification + tailoring hints) for shortlisted jobs only.
 - **P0** Cost guard: assert premium calls ≤ shortlist size (NFR-1 test).
 - **Demo:** shortlisted jobs carry a written "why you fit / what to close"; others don't incur premium cost.
+- **Detail:** [plan/active/week-7.md](../plan/active/week-7.md)
 
 ### Week 8 — Funnel analytics
 - **P0** `GET /analytics/funnel`: apply → response → interview → offer, sliced by role type and band.

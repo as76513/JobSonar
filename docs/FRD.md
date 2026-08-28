@@ -65,7 +65,9 @@ Each requirement has an ID (`FR-n`), a priority (P0 must-have / P1 should / P2 n
 - **FR-20 (P1) Conversion funnel.** Show apply → response → interview → offer rates, sliced by role type and match band.
   - *Accept:* the seeker can see, e.g., response rate for "strong" vs "stretch" matches.
 - **FR-21 (P2) Digest.** Daily/weekly summary of new matches above threshold.
-- **FR-22 (P2) Company brief.** On demand, a short brief per application (rating, size, recent news).
+- **FR-22 (P2) Company brief.** On demand, a short brief per application (rating, size, recent news). v1 ships company+role review links (Glassdoor, Mouthshut, web search) and optional Brave Search snippets. There is no official Glassdoor or Mouthshut read API; scraping those sites is out of scope.
+- **FR-24 (P1) Posted-salary filter and high-pay rank.** Seeker can list only jobs that posted a salary range and rank those by pay (currency-normalised), with match score as a tie-break.
+  - *Accept:* `GET /jobs?has_salary=1&sort=salary` returns only rows with `salary_min` or `salary_max`, highest approximate USD pay first.
 - **FR-23 (P2) Assisted apply.** One-click open of the application page with a tailored resume suggestion — never automated submission.
 
 ## 4. Data retention & privacy

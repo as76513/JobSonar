@@ -22,6 +22,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/jobs": { target: "http://127.0.0.1:8080", bypass: bypassNavigations },
+      "/reviews": { target: "http://127.0.0.1:8080", bypass: bypassNavigations },
       "/applications": { target: "http://127.0.0.1:8080", bypass: bypassNavigations },
       "/profile": { target: "http://127.0.0.1:8080", bypass: bypassNavigations },
       "/companies": { target: "http://127.0.0.1:8080", bypass: bypassNavigations },

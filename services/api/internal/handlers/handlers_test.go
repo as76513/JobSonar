@@ -22,9 +22,13 @@ type fake struct {
 	profile   store.Profile
 	apps      []store.Application
 	resumes   []store.Resume
+	lastOpts  store.JobListOpts
 }
 
-func (f *fake) ListJobs(context.Context) ([]store.Job, error) { return f.jobs, nil }
+func (f *fake) ListJobs(_ context.Context, opts store.JobListOpts) ([]store.Job, error) {
+	f.lastOpts = opts
+	return f.jobs, nil
+}
 
 func (f *fake) GetJob(_ context.Context, id uuid.UUID) (store.Job, error) {
 	for _, j := range f.jobs {
@@ -174,6 +178,48 @@ func TestListAndGetJobs(t *testing.T) {
 	}
 }
 
+func TestGetJobReturnsAnalysis(t *testing.T) {
+	id := uuid.MustParse("55555555-5555-5555-5555-555555555555")
+	f := &fake{jobs: []store.Job{{
+		ID: id, Title: "SRE", Company: "Acme", Location: "Pune",
+		Score:       &store.Score{Composite: 0.85, Band: "strong"},
+		HasAnalysis: true,
+		Analysis: &store.Analysis{
+			JustificationMD: "You fit kubernetes.",
+			TailoringMD:     "Add a Helm bullet.",
+			Model:           "fake",
+		},
+	}}}
+	app := setup(t, f)
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/jobs/"+id.String(), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	an, _ := got["analysis"].(map[string]any)
+	if an == nil || an["justification_md"] != "You fit kubernetes." || an["tailoring_md"] != "Add a Helm bullet." {
+		t.Fatalf("detail should include analysis: %s", body)
+	}
+
+	resp, err = app.Test(httptest.NewRequest("GET", "/jobs", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	var listed []map[string]any
+	if err := json.Unmarshal(body, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if listed[0]["analysis"] != nil {
+		t.Fatalf("list should omit analysis prose: %s", body)
+	}
+}
+
 func TestCreateCompany(t *testing.T) {
 	f := &fake{}
 	app := setup(t, f)
@@ -251,14 +297,64 @@ func TestApplicationsPipeline(t *testing.T) {
 // composite, tested live against Postgres in
 // internal/store/scores_test.go). The handler must not re-sort or
 // otherwise second-guess the order the store returns.
+func TestListJobsSalaryQuery(t *testing.T) {
+	f := &fake{jobs: []store.Job{{
+		ID:    uuid.MustParse("66666666-6666-6666-6666-666666666666"),
+		Title: "SRE", Company: "Acme",
+	}}}
+	app := setup(t, f)
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/jobs?has_salary=1&sort=salary", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	if !f.lastOpts.HasSalary || f.lastOpts.Sort != "salary" {
+		t.Fatalf("opts=%+v", f.lastOpts)
+	}
+
+	bad, err := app.Test(httptest.NewRequest("GET", "/jobs?sort=random", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bad.StatusCode != 400 {
+		t.Fatalf("bad sort status=%d", bad.StatusCode)
+	}
+}
+
+func TestGetJobAttachesReviewLinks(t *testing.T) {
+	id := uuid.MustParse("77777777-7777-7777-7777-777777777777")
+	f := &fake{jobs: []store.Job{{
+		ID: id, Title: "DevOps Engineer", Company: "Dkatalis Labs",
+	}}}
+	app := setup(t, f)
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/jobs/"+id.String(), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	rev, _ := got["review"].(map[string]any)
+	links, _ := rev["links"].(map[string]any)
+	if links == nil || links["glassdoor"] == nil || links["mouthshut"] == nil || links["web_search"] == nil {
+		t.Fatalf("want outbound review links: %s", body)
+	}
+}
+
 func TestListPreservesStoreOrder(t *testing.T) {
 	second := store.Job{
-		ID: uuid.MustParse("33333333-3333-3333-3333-333333333333"),
+		ID:    uuid.MustParse("33333333-3333-3333-3333-333333333333"),
 		Title: "Sales Lead", Company: "Acme", Location: "Pune",
 		Score: &store.Score{Composite: 0.2, Band: "stretch"},
 	}
 	first := store.Job{
-		ID: uuid.MustParse("44444444-4444-4444-4444-444444444444"),
+		ID:    uuid.MustParse("44444444-4444-4444-4444-444444444444"),
 		Title: "Platform Engineer", Company: "Acme", Location: "Pune",
 		Score: &store.Score{Composite: 0.9, Band: "strong"},
 	}

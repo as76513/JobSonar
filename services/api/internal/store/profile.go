@@ -12,11 +12,13 @@ import (
 func (s *Store) GetProfile(ctx context.Context) (Profile, error) {
 	var p Profile
 	var raw []byte
-	var embedText *string
+	// Only the boolean — never embedding::text. Parsing a 768-d nomic
+	// vector on every UI poll 500'd the profile-embedded pipeline step
+	// when pgvector's text form didn't match ParseVector.
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, skills, embedding IS NOT NULL, embedding::text, updated_at
+		SELECT id, skills, embedding IS NOT NULL, updated_at
 		FROM profiles ORDER BY updated_at DESC LIMIT 1
-	`).Scan(&p.ID, &raw, &p.HasEmbedding, &embedText, &p.UpdatedAt)
+	`).Scan(&p.ID, &raw, &p.HasEmbedding, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Profile{Skills: []string{}}, nil
 	}
@@ -28,14 +30,6 @@ func (s *Store) GetProfile(ctx context.Context) (Profile, error) {
 	}
 	if p.Skills == nil {
 		p.Skills = []string{}
-	}
-	if embedText != nil && *embedText != "" {
-		v, err := ParseVector(*embedText)
-		if err != nil {
-			return Profile{}, err
-		}
-		p.Embedding = v
-		p.HasEmbedding = len(v) > 0
 	}
 	return p, nil
 }

@@ -38,6 +38,10 @@ scores(job_id, profile_id, composite, skill_cov, semantic, seniority_fit,       
 analyses(job_id, profile_id, justification_md, tailoring_md, model, created_at)  -- shortlist only
 applications(id, job_id, resume_variant, status, applied_at, notes, contacts jsonb)
 application_events(application_id, from_status, to_status, at)
+company_reviews(company_key, role_key, company, role_title, rating, review_count,
+         summary, snippets jsonb, links jsonb, provider, status, error, fetched_at)
+         -- cache of company+role reputation. Glassdoor/Mouthshut have no public
+         -- read API; provider=links (outbound URLs only) or brave (official Search API)
 ```
 
 `dedup_hash = sha256(lower(company) || '|' || normalize(title) || '|' || normalize(location))`.
@@ -77,8 +81,14 @@ Implementations: `OllamaLLM`, `BedrockLLM`, `LocalEmbedder`, `BedrockEmbedder`. 
 GET  /profile            skill list + has_embedding + latest resume status
 PUT  /profile            replace skill list (clears embedding until next agent pass)
 POST /profile/resume     store PDF/DOCX as pending; Python agent parses (no Go parse)
-GET  /jobs               rank by skill coverage (job-ask overlap); semantic cosine as tiebreak when embeddings exist (?band= Week 6)
-GET  /jobs/{id}          job detail + matched / job-ask gaps + optional score.semantic
+GET  /jobs               rank by scores.composite; omit band=excluded; include named sub-scores + matched/missing; has_analysis flag
+                         query: has_salary=1 (posted range only); sort=match|salary
+                         sort=salary orders by FX-normalised pay, then review rating, then composite
+                         (INR + value < 1000 is treated as LPA for ranking only; Adzuna IN quirk)
+                         payload includes salary_min/max/currency + review (links/rating; snippets omitted on list)
+GET  /jobs/{id}          job detail + full breakdown + optional analysis (justification/tailoring); excluded jobs still returned so the gate is explainable
+                         refreshes a stale company+role review via Brave (if keyed) or link-only
+POST /reviews/refresh    cache reviews for salary-listed jobs (max 40). No Glassdoor/Mouthshut scrape.
 GET  /applications       tracker rows
 POST /applications       create application (default status saved)
 PATCH /applications/{id} change status (appends event)
@@ -115,4 +125,4 @@ POST /companies          add target company to ATS list
 
 ## 8. Testing
 
-Unit tests per connector (recorded fixtures), dedup property tests, scoring golden tests (fixed resume+job → expected sub-scores within tolerance), contract tests for the API, and a smoke test that runs one connector end-to-end into the DB.
+Unit tests per connector (recorded fixtures), dedup property tests, scoring golden tests (fixed resume+job → expected sub-scores within tolerance), NFR-1 cost-guard test (deep-dive `complete()` count ≤ shortlist size), contract tests for the API, and a smoke test that runs one connector end-to-end into the DB.
