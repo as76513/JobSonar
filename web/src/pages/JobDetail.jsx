@@ -8,6 +8,25 @@ function pct(n) {
   return n == null ? "—" : `${Math.round(n * 100)}%`;
 }
 
+function formatSalary(job) {
+  if (job.salary_min == null && job.salary_max == null) return null;
+  const cur = (job.currency || "").toUpperCase();
+  const high = job.salary_max ?? job.salary_min;
+  const inr = cur === "INR" || cur === "RS" || (!cur && /(india|pune|bengaluru|bangalore|hyderabad|mumbai|chennai|noida|gurgaon|gurugram|delhi|kolkata)/i.test(job.location || ""));
+  if (inr && high < 1000) {
+    const range = job.salary_min != null && job.salary_max != null && job.salary_min !== job.salary_max
+      ? `${job.salary_min} – ${job.salary_max}`
+      : `${high}`;
+    return `₹${range} LPA`;
+  }
+  const fmt = (n) => new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(n);
+  const range = job.salary_min != null && job.salary_max != null && job.salary_min !== job.salary_max
+    ? `${fmt(job.salary_min)} – ${fmt(job.salary_max)}`
+    : fmt(job.salary_min ?? job.salary_max);
+  if (inr) return `₹${range}`;
+  return cur ? `${cur} ${range}` : range;
+}
+
 const BAND_LABEL = {
   strong: "strong match",
   possible: "possible match",
@@ -72,7 +91,7 @@ export default function JobDetail() {
     <main className="detail">
       <Link to="/" className="back">← Jobs</Link>
       <h1>{job.title}</h1>
-      <p className="sub">{job.company} · {job.location || "—"} · {job.source}</p>
+      <p className="sub">{job.company} · {job.location || "—"} · {job.source}{formatSalary(job) ? ` · ${formatSalary(job)}` : ""}</p>
       <div className="row">
         <div className="score big" data-band={band}>{score ? pct(score.composite) : "…"}</div>
         <div>
@@ -94,8 +113,46 @@ export default function JobDetail() {
           )}
           <p><strong>Matched</strong> {(score?.matched_skills || []).join(", ") || "—"}</p>
           <p><strong>Job asks, not on resume</strong> {(score?.missing_skills || []).join(", ") || "—"}</p>
+          <p><strong>Salary</strong> {formatSalary(job) || "not posted"}</p>
         </div>
       </div>
+      {job.review && (
+        <section className="analysis review">
+          <h2>Company and role reviews</h2>
+          <p>
+            {job.review.rating != null && <strong>{job.review.rating.toFixed(1)} / 5 · </strong>}
+            {job.review.summary || "Open the links below. Glassdoor and Mouthshut do not offer a public read API."}
+          </p>
+          <p className="chips">
+            {job.review.links?.glassdoor && <a className="pipe" href={job.review.links.glassdoor} target="_blank" rel="noreferrer">Glassdoor</a>}
+            {job.review.links?.mouthshut && <a className="pipe" href={job.review.links.mouthshut} target="_blank" rel="noreferrer">Mouthshut</a>}
+            {job.review.links?.web_search && <a className="pipe" href={job.review.links.web_search} target="_blank" rel="noreferrer">Web search</a>}
+          </p>
+          {(job.review.snippets || []).length > 0 && (
+            <ul className="snippets">
+              {job.review.snippets.map((s) => (
+                <li key={s.url}>
+                  <a href={s.url} target="_blank" rel="noreferrer">{s.title || s.source || s.url}</a>
+                  {s.snippet && <p>{s.snippet}</p>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {job.review.provider && <p className="meta">Review lookup · {job.review.provider}{job.review.status === "error" ? " · search failed, links only" : ""}</p>}
+        </section>
+      )}
+      {job.analysis && (
+        <section className="analysis">
+          <h2>Why you fit</h2>
+          <p>{job.analysis.justification_md || "—"}</p>
+          <h2>What to close</h2>
+          <p>{job.analysis.tailoring_md || "—"}</p>
+          {job.analysis.model && <p className="meta">Deep dive · {job.analysis.model}</p>}
+        </section>
+      )}
+      {!job.analysis && band && band !== "strong" && band !== "unscored" && (
+        <p className="meta">Deep dive runs on strong matches only.</p>
+      )}
       <div className="actions">
         <a className="btn ghost" href={job.source_url} target="_blank" rel="noreferrer">Open posting</a>
         {!job.application && <button className="btn" disabled={busy} onClick={save}>Save to tracker</button>}

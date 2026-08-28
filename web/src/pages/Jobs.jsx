@@ -6,6 +6,33 @@ function pct(n) {
   return `${Math.round((n || 0) * 100)}%`;
 }
 
+function indiaLocation(loc) {
+  return /(india|pune|bengaluru|bangalore|hyderabad|mumbai|chennai|noida|gurgaon|gurugram|delhi|kolkata)/i.test(loc || "");
+}
+
+function formatSalary(j) {
+  if (j.salary_min == null && j.salary_max == null) return null;
+  const cur = (j.currency || "").toUpperCase();
+  const high = j.salary_max ?? j.salary_min;
+  const inr = cur === "INR" || cur === "RS" || (!cur && indiaLocation(j.location));
+  if (inr && high < 1000) {
+    const range = j.salary_min != null && j.salary_max != null && j.salary_min !== j.salary_max
+      ? `${j.salary_min}–${j.salary_max}`
+      : `${high}`;
+    return `₹${range} LPA`;
+  }
+  const fmt = (n) => {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+    if (n >= 1000) return `${Math.round(n / 1000)}k`;
+    return `${Math.round(n)}`;
+  };
+  const range = j.salary_min != null && j.salary_max != null && j.salary_min !== j.salary_max
+    ? `${fmt(j.salary_min)}–${fmt(j.salary_max)}`
+    : fmt(j.salary_min ?? j.salary_max);
+  if (inr) return `₹${range}`;
+  return cur ? `${cur} ${range}` : range;
+}
+
 function snapshot(jobs) {
   const top = jobs[0];
   if (!top) return null;
@@ -65,11 +92,16 @@ export default function Jobs() {
   const [saving, setSaving] = useState(false);
   const [phase, setPhase] = useState("idle");
   const [notice, setNotice] = useState("");
+  const [hasSalary, setHasSalary] = useState(false);
+  const [sort, setSort] = useState("match");
+  const [reviewBusy, setReviewBusy] = useState(false);
   const beforeRef = useRef(null);
   const watchStarted = useRef(0);
 
-  async function refresh() {
-    const [j, p] = await Promise.all([api.jobs(), api.profile()]);
+  async function refresh(next = {}) {
+    const pay = next.hasSalary ?? hasSalary;
+    const order = next.sort ?? sort;
+    const [j, p] = await Promise.all([api.jobs({ hasSalary: pay, sort: order }), api.profile()]);
     setJobs(j || []);
     setProfile(p);
     setSkills((p.skills || []).join(", "));
@@ -117,10 +149,12 @@ export default function Jobs() {
           setNotice("Profile is embedded. Re-ranking jobs…");
         }
         if (Date.now() - watchStarted.current > 90000) {
-          setNotice("Still waiting on the agent. In a terminal: EMBED_BACKEND=fake make embed  (or make agent). This page will pick up the result.");
+          setNotice("Still waiting on the agent. In a terminal: make embed (one pass) or make agent (loop). This page will pick up the result.");
         }
       } catch (e) {
-        if (!stop) setErr(e.message);
+        // A single poll blip (API restart, migrate) must not freeze the
+        // pipeline on "Internal Server Error" during embed/score.
+        if (!stop) setNotice(e.message);
       }
     }
     tick();
@@ -165,9 +199,36 @@ export default function Jobs() {
     }
   }
 
+  function applySalaryFilter(on) {
+    const order = on ? "salary" : "match";
+    setHasSalary(on);
+    setSort(order);
+    refresh({ hasSalary: on, sort: order }).catch((e) => setErr(e.message));
+  }
+
+  function applySort(order) {
+    setSort(order);
+    refresh({ sort: order }).catch((e) => setErr(e.message));
+  }
+
+  async function onRefreshReviews() {
+    setReviewBusy(true);
+    setErr("");
+    try {
+      const r = await api.refreshReviews();
+      await refresh();
+      setNotice(`Reviews refreshed for ${r.refreshed} salary-listed roles (${r.provider}). Glassdoor/Mouthshut have no public API — this is search snippets plus outbound links.`);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
   const steps = pipeline(profile, jobs, phase);
   const scored = jobs.some((j) => j.score != null);
   const busy = phase === "uploading" || phase === "waiting";
+  const rankLabel = sort === "salary" ? "high pay (then reviews, then match)" : "composite score";
 
   return (
     <main>
@@ -210,8 +271,25 @@ export default function Jobs() {
         </label>
       </div>
       {err && <p className="err">{err}</p>}
+      <div className="filters">
+        <label className="toggle">
+          <input type="checkbox" checked={hasSalary} onChange={(e) => applySalaryFilter(e.target.checked)} />
+          Salary listed
+        </label>
+        <label>
+          Rank
+          <select value={sort} onChange={(e) => applySort(e.target.value)}>
+            <option value="match">Match score</option>
+            <option value="salary">High pay first</option>
+          </select>
+        </label>
+        <button type="button" className="btn ghost" disabled={reviewBusy || busy} onClick={onRefreshReviews}>
+          {reviewBusy ? "Searching reviews…" : "Refresh reviews"}
+        </button>
+      </div>
       <p className="meta">
-        {jobs.length} jobs · ranked by composite score
+        {jobs.length} jobs · ranked by {rankLabel}
+        {hasSalary ? " · salary required" : ""}
         {busy ? " · watching for agent…" : ""}
       </p>
       <ul className="cards">
@@ -225,9 +303,12 @@ export default function Jobs() {
                 </div>
                 <div>
                   <h2>{j.title}</h2>
-                  <p>{j.company} · {j.location || "—"} · {j.source}</p>
+                  <p>{j.company} · {j.location || "—"} · {j.source}{formatSalary(j) ? ` · ${formatSalary(j)}` : ""}</p>
                   <p className="chips">
                     {j.score && <span className="pipe">{band}</span>}
+                    {formatSalary(j) && <span className="pipe">{formatSalary(j)}</span>}
+                    {j.review?.rating != null && <span className="pipe">reviews {j.review.rating.toFixed(1)}/5</span>}
+                    {j.has_analysis && <span className="pipe">analyzed</span>}
                     {j.score?.semantic != null && <span className="pipe">sim {pct(j.score.semantic)}</span>}
                     {(j.score?.matched_skills || []).slice(0, 6).map((s) => <span key={s}>{s}</span>)}
                     {j.application && <span className="pipe">{j.application.status}</span>}

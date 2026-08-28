@@ -12,6 +12,52 @@ def _vec(values: Iterable[float]) -> str:
     return "[" + ",".join(f"{x:.8f}" for x in values) + "]"
 
 
+def _json_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = json.loads(value)
+    return list(value) if value else []
+
+
+# Hard gates live in this CASE (CLAUDE.md golden rule 3 / FRD FR-12):
+# must-have skills, seniority mismatch, or location mismatch force
+# band='excluded' regardless of the composite the agent computed.
+_SCORE_INSERT = """
+INSERT INTO scores (job_id, profile_id, composite, skill_cov, semantic,
+                     seniority_fit, location_fit, recency, band,
+                     matched_skills, missing_skills, scored_at)
+SELECT
+    %(job_id)s::uuid, %(profile_id)s::uuid, %(composite)s, %(skill_cov)s, %(semantic)s,
+    %(seniority_fit)s, %(location_fit)s, %(recency)s,
+    CASE
+        WHEN NOT (p.must_have_skills = '[]'::jsonb
+                  OR p.must_have_skills <@ COALESCE(j.skills_extracted, '[]'::jsonb))
+            THEN 'excluded'
+        WHEN COALESCE(p.seniority, '') <> '' AND %(seniority_fit)s < 0.3
+            THEN 'excluded'
+        WHEN (COALESCE(p.location, '') <> '' OR COALESCE(p.remote_pref, '') <> '')
+             AND %(location_fit)s = 0.0
+            THEN 'excluded'
+        ELSE %(band)s
+    END,
+    %(matched_skills)s::jsonb, %(missing_skills)s::jsonb, now()
+FROM jobs j, profiles p
+WHERE j.id = %(job_id)s::uuid AND p.id = %(profile_id)s::uuid
+ON CONFLICT (job_id, profile_id) DO UPDATE SET
+    composite = EXCLUDED.composite,
+    skill_cov = EXCLUDED.skill_cov,
+    semantic = EXCLUDED.semantic,
+    seniority_fit = EXCLUDED.seniority_fit,
+    location_fit = EXCLUDED.location_fit,
+    recency = EXCLUDED.recency,
+    band = EXCLUDED.band,
+    matched_skills = EXCLUDED.matched_skills,
+    missing_skills = EXCLUDED.missing_skills,
+    scored_at = EXCLUDED.scored_at
+"""
+
+
 class Store:
     def __init__(self, dsn: str | None = None):
         self.dsn = dsn or config.POSTGRES_DSN
@@ -103,11 +149,13 @@ class Store:
             return out
 
     def set_profile_embedding(self, profile_id: str, embedding: list[float]) -> None:
+        # Embed-only: do not bump updated_at. That column stale-marks every
+        # scores row; a vector fill-in must not force a full rescore.
         with self.connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE profiles
-                SET embedding = %s::vector, updated_at = now()
+                SET embedding = %s::vector
                 WHERE id = %s::uuid
                 """,
                 (_vec(embedding), profile_id),
@@ -166,7 +214,7 @@ class Store:
             cur.execute(
                 """
                 SELECT j.id::text, j.title, j.description_md, j.location, j.remote_type,
-                       j.posted_at, j.first_seen_at,
+                       j.posted_at, j.first_seen_at, j.skills_extracted,
                        (1 - (e.embedding <=> p.embedding))::float8 AS semantic
                 FROM jobs j
                 LEFT JOIN job_embeddings e ON e.job_id = j.id
@@ -180,8 +228,19 @@ class Store:
                 """,
                 {"profile_id": profile_id, "limit": limit},
             )
-            cols = ("id", "title", "description_md", "location", "remote_type", "posted_at", "first_seen_at", "semantic")
-            return [dict(zip(cols, row)) for row in cur.fetchall()]
+            cols = (
+                "id", "title", "description_md", "location", "remote_type",
+                "posted_at", "first_seen_at", "skills_extracted", "semantic",
+            )
+            out = []
+            for row in cur.fetchall():
+                item = dict(zip(cols, row))
+                item["skills_extracted"] = (
+                    None if item["skills_extracted"] is None
+                    else _json_list(item["skills_extracted"])
+                )
+                out.append(item)
+            return out
 
     def upsert_score(
         self,
@@ -198,63 +257,52 @@ class Store:
         matched_skills: list[str],
         missing_skills: list[str],
     ) -> None:
-        """Persists one job's sub-scores. The CASE below is the hard gate
-        (CLAUDE.md golden rule 3 / FRD FR-12): must-have skills (jsonb
-        containment), a clear seniority mismatch, or a clear location
-        mismatch force band='excluded' regardless of the composite the
-        agent computed -- decided by Postgres via SQL, not Python
-        control flow, so a good composite/semantic score can never talk
-        its way past a gate.
+        """Persists one job's sub-scores. Hard gates are the CASE in
+        _SCORE_INSERT — decided by Postgres, not Python control flow.
         """
+        self.write_score_batch(profile_id, [{
+            "job_id": job_id,
+            "composite": composite,
+            "skill_cov": skill_cov,
+            "semantic": semantic,
+            "seniority_fit": seniority_fit,
+            "location_fit": location_fit,
+            "recency": recency,
+            "band": band,
+            "matched_skills": matched_skills,
+            "missing_skills": missing_skills,
+        }])
+
+    def write_score_batch(self, profile_id: str, rows: list[dict]) -> None:
+        """One connection / one commit for a scoring batch. Optional
+        write_skills updates jobs.skills_extracted before the gate CASE
+        reads it.
+        """
+        if not rows:
+            return
         with self.connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO scores (job_id, profile_id, composite, skill_cov, semantic,
-                                     seniority_fit, location_fit, recency, band,
-                                     matched_skills, missing_skills, scored_at)
-                SELECT
-                    %(job_id)s::uuid, %(profile_id)s::uuid, %(composite)s, %(skill_cov)s, %(semantic)s,
-                    %(seniority_fit)s, %(location_fit)s, %(recency)s,
-                    CASE
-                        WHEN NOT (p.must_have_skills = '[]'::jsonb
-                                  OR p.must_have_skills <@ COALESCE(j.skills_extracted, '[]'::jsonb))
-                            THEN 'excluded'
-                        WHEN COALESCE(p.seniority, '') <> '' AND %(seniority_fit)s < 0.3
-                            THEN 'excluded'
-                        WHEN (COALESCE(p.location, '') <> '' OR COALESCE(p.remote_pref, '') <> '')
-                             AND %(location_fit)s = 0.0
-                            THEN 'excluded'
-                        ELSE %(band)s
-                    END,
-                    %(matched_skills)s::jsonb, %(missing_skills)s::jsonb, now()
-                FROM jobs j, profiles p
-                WHERE j.id = %(job_id)s::uuid AND p.id = %(profile_id)s::uuid
-                ON CONFLICT (job_id, profile_id) DO UPDATE SET
-                    composite = EXCLUDED.composite,
-                    skill_cov = EXCLUDED.skill_cov,
-                    semantic = EXCLUDED.semantic,
-                    seniority_fit = EXCLUDED.seniority_fit,
-                    location_fit = EXCLUDED.location_fit,
-                    recency = EXCLUDED.recency,
-                    band = EXCLUDED.band,
-                    matched_skills = EXCLUDED.matched_skills,
-                    missing_skills = EXCLUDED.missing_skills,
-                    scored_at = EXCLUDED.scored_at
-                """,
-                {
-                    "job_id": job_id,
-                    "profile_id": profile_id,
-                    "composite": composite,
-                    "skill_cov": skill_cov,
-                    "semantic": semantic,
-                    "seniority_fit": seniority_fit,
-                    "location_fit": location_fit,
-                    "recency": recency,
-                    "band": band,
-                    "matched_skills": json.dumps(matched_skills),
-                    "missing_skills": json.dumps(missing_skills),
-                },
-            )
+            for row in rows:
+                if row.get("write_skills"):
+                    cur.execute(
+                        "UPDATE jobs SET skills_extracted = %s::jsonb WHERE id = %s::uuid",
+                        (json.dumps(row.get("skills") or []), row["job_id"]),
+                    )
+                cur.execute(
+                    _SCORE_INSERT,
+                    {
+                        "job_id": row["job_id"],
+                        "profile_id": profile_id,
+                        "composite": row["composite"],
+                        "skill_cov": row["skill_cov"],
+                        "semantic": row.get("semantic"),
+                        "seniority_fit": row["seniority_fit"],
+                        "location_fit": row["location_fit"],
+                        "recency": row["recency"],
+                        "band": row["band"],
+                        "matched_skills": json.dumps(row.get("matched_skills") or []),
+                        "missing_skills": json.dumps(row.get("missing_skills") or []),
+                    },
+                )
             conn.commit()
 
     def set_job_skills_extracted(self, job_id: str, skills: list[str]) -> None:
@@ -262,6 +310,66 @@ class Store:
             cur.execute(
                 "UPDATE jobs SET skills_extracted = %s::jsonb WHERE id = %s::uuid",
                 (json.dumps(skills), job_id),
+            )
+            conn.commit()
+
+    def jobs_for_deep_dive(self, profile_id: str, band: str) -> list[dict]:
+        """Shortlist: scores at `band` with no analyses row yet.
+        A rescore must not rewrite existing prose (that made every
+        resume upload re-prompt every strong job)."""
+        with self.connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT j.id::text, j.title, j.company, j.description_md,
+                       s.matched_skills, s.missing_skills, s.band
+                FROM scores s
+                JOIN jobs j ON j.id = s.job_id
+                LEFT JOIN analyses a ON a.job_id = s.job_id AND a.profile_id = s.profile_id
+                WHERE s.profile_id = %s::uuid
+                  AND s.band = %s
+                  AND a.job_id IS NULL
+                ORDER BY s.composite DESC
+                """,
+                (profile_id, band),
+            )
+            out = []
+            for rid, title, company, desc, matched, missing, jband in cur.fetchall():
+                if isinstance(matched, str):
+                    matched = json.loads(matched)
+                if isinstance(missing, str):
+                    missing = json.loads(missing)
+                out.append({
+                    "id": rid,
+                    "title": title or "",
+                    "company": company or "",
+                    "description_md": desc or "",
+                    "matched_skills": matched or [],
+                    "missing_skills": missing or [],
+                    "band": jband,
+                })
+            return out
+
+    def upsert_analysis(
+        self,
+        job_id: str,
+        profile_id: str,
+        *,
+        justification_md: str,
+        tailoring_md: str,
+        model: str,
+    ) -> None:
+        with self.connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO analyses (job_id, profile_id, justification_md, tailoring_md, model, created_at)
+                VALUES (%s::uuid, %s::uuid, %s, %s, %s, now())
+                ON CONFLICT (job_id, profile_id) DO UPDATE SET
+                    justification_md = EXCLUDED.justification_md,
+                    tailoring_md = EXCLUDED.tailoring_md,
+                    model = EXCLUDED.model,
+                    created_at = EXCLUDED.created_at
+                """,
+                (job_id, profile_id, justification_md, tailoring_md, model),
             )
             conn.commit()
 

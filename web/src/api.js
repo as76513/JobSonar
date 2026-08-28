@@ -27,8 +27,15 @@ async function req(path, opts = {}) {
 }
 
 export const api = {
-  jobs: () => req("/jobs"),
+  jobs: (opts = {}) => {
+    const q = new URLSearchParams();
+    if (opts.hasSalary) q.set("has_salary", "1");
+    if (opts.sort) q.set("sort", opts.sort);
+    const qs = q.toString();
+    return req("/jobs" + (qs ? `?${qs}` : ""));
+  },
   job: (id) => req(`/jobs/${id}`),
+  refreshReviews: () => req("/reviews/refresh", { method: "POST" }),
   profile: () => req("/profile"),
   saveProfile: (skills) => req("/profile", { method: "PUT", body: JSON.stringify({ skills }) }),
   uploadResume: (file) => {

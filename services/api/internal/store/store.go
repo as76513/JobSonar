@@ -38,19 +38,38 @@ type Score struct {
 }
 
 type Job struct {
-	ID            uuid.UUID   `json:"id"`
-	Title         string      `json:"title"`
-	Company       string      `json:"company"`
-	Location      string      `json:"location"`
-	Source        string      `json:"source"`
-	SourceURL     string      `json:"source_url"`
-	DescriptionMD string      `json:"description_md,omitempty"`
-	PostedAt      *time.Time  `json:"posted_at,omitempty"`
-	Status        string      `json:"status"`
-	LastSeenAt    time.Time   `json:"last_seen_at"`
-	Sources       []JobSource `json:"sources"`
-	Application   *AppBrief   `json:"application,omitempty"`
-	Score         *Score      `json:"score,omitempty"`
+	ID            uuid.UUID      `json:"id"`
+	Title         string         `json:"title"`
+	Company       string         `json:"company"`
+	Location      string         `json:"location"`
+	Source        string         `json:"source"`
+	SourceURL     string         `json:"source_url"`
+	DescriptionMD string         `json:"description_md,omitempty"`
+	SalaryMin     *float64       `json:"salary_min,omitempty"`
+	SalaryMax     *float64       `json:"salary_max,omitempty"`
+	Currency      string         `json:"currency,omitempty"`
+	PostedAt      *time.Time     `json:"posted_at,omitempty"`
+	Status        string         `json:"status"`
+	LastSeenAt    time.Time      `json:"last_seen_at"`
+	Sources       []JobSource    `json:"sources"`
+	Application   *AppBrief      `json:"application,omitempty"`
+	Score         *Score         `json:"score,omitempty"`
+	HasAnalysis   bool           `json:"has_analysis"`
+	Analysis      *Analysis      `json:"analysis,omitempty"`
+	Review        *CompanyReview `json:"review,omitempty"`
+}
+
+// JobListOpts filters and reorders GET /jobs. Ranking stays in SQL.
+type JobListOpts struct {
+	HasSalary bool   // only rows with salary_min or salary_max
+	Sort      string // "" / "match" (composite) or "salary" (high pay first)
+}
+
+type Analysis struct {
+	JustificationMD string    `json:"justification_md"`
+	TailoringMD     string    `json:"tailoring_md"`
+	Model           string    `json:"model"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type AppBrief struct {
@@ -76,17 +95,17 @@ type Profile struct {
 }
 
 type Application struct {
-	ID            uuid.UUID `json:"id"`
-	JobID         uuid.UUID `json:"job_id"`
-	Title         string    `json:"title"`
-	Company       string    `json:"company"`
-	Location      string    `json:"location"`
-	SourceURL     string    `json:"source_url"`
-	ResumeVariant string    `json:"resume_variant"`
-	Status        string    `json:"status"`
+	ID            uuid.UUID  `json:"id"`
+	JobID         uuid.UUID  `json:"job_id"`
+	Title         string     `json:"title"`
+	Company       string     `json:"company"`
+	Location      string     `json:"location"`
+	SourceURL     string     `json:"source_url"`
+	ResumeVariant string     `json:"resume_variant"`
+	Status        string     `json:"status"`
 	AppliedAt     *time.Time `json:"applied_at,omitempty"`
-	Notes         string    `json:"notes"`
-	CreatedAt     time.Time `json:"created_at"`
+	Notes         string     `json:"notes"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 type Company struct {
@@ -120,21 +139,15 @@ func (s *Store) Close() { s.pool.Close() }
 // the one profile this single-user project targets, per CLAUDE.md).
 const currentProfileID = `(SELECT id FROM profiles ORDER BY updated_at DESC LIMIT 1)`
 
-func (s *Store) ListJobs(ctx context.Context) ([]Job, error) {
-	rows, err := s.pool.Query(ctx, jobSelect+`
-		FROM jobs j
-		LEFT JOIN applications a ON a.job_id = j.id
-		LEFT JOIN LATERAL (
-			SELECT COALESCE(json_agg(json_build_object('source', src.source, 'source_url', src.source_url)), '[]') AS sources
-			FROM job_sources src WHERE src.job_id = j.id
-		) srcs ON true
-		LEFT JOIN LATERAL (
-			SELECT * FROM scores sc
-			WHERE sc.job_id = j.id AND sc.profile_id = `+currentProfileID+`
-		) sc ON true
-		WHERE sc.band IS DISTINCT FROM 'excluded'
-		ORDER BY sc.composite DESC NULLS LAST, j.last_seen_at DESC
-	`)
+func (s *Store) ListJobs(ctx context.Context, opts JobListOpts) ([]Job, error) {
+	q := jobSelect + jobFrom + `
+		WHERE sc.band IS DISTINCT FROM 'excluded'`
+	if opts.HasSalary {
+		q += `
+		AND (j.salary_min IS NOT NULL OR j.salary_max IS NOT NULL)`
+	}
+	q += jobOrder(opts.Sort)
+	rows, err := s.pool.Query(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -146,17 +159,7 @@ func (s *Store) GetJob(ctx context.Context, id uuid.UUID) (Job, error) {
 	// Unlike ListJobs, an excluded (hard-gated) score is still returned
 	// here -- a job someone links to directly should explain why it was
 	// excluded, not disappear (Week 6 Day 4: never silently dropped).
-	row := s.pool.QueryRow(ctx, jobSelect+`
-		FROM jobs j
-		LEFT JOIN applications a ON a.job_id = j.id
-		LEFT JOIN LATERAL (
-			SELECT COALESCE(json_agg(json_build_object('source', src.source, 'source_url', src.source_url)), '[]') AS sources
-			FROM job_sources src WHERE src.job_id = j.id
-		) srcs ON true
-		LEFT JOIN LATERAL (
-			SELECT * FROM scores sc
-			WHERE sc.job_id = j.id AND sc.profile_id = `+currentProfileID+`
-		) sc ON true
+	row := s.pool.QueryRow(ctx, jobSelect+jobFrom+`
 		WHERE j.id = $1
 	`, id)
 	j, err := scanJob(row)
@@ -168,12 +171,79 @@ func (s *Store) GetJob(ctx context.Context, id uuid.UUID) (Job, error) {
 
 const jobSelect = `
 		SELECT j.id, j.title, j.company, j.location, j.source, j.source_url,
-		       j.description_md, j.posted_at, j.status, j.last_seen_at,
+		       j.description_md, j.salary_min, j.salary_max, COALESCE(j.currency, ''),
+		       j.posted_at, j.status, j.last_seen_at,
 		       srcs.sources,
 		       a.id, a.status,
 		       sc.composite, sc.skill_cov, sc.semantic, sc.seniority_fit,
-		       sc.location_fit, sc.recency, sc.band, sc.matched_skills, sc.missing_skills
+		       sc.location_fit, sc.recency, sc.band, sc.matched_skills, sc.missing_skills,
+		       COALESCE(an.has_analysis, false),
+		       an.justification_md, an.tailoring_md, an.model, an.created_at,
+		       rev.rating, COALESCE(rev.review_count, 0), COALESCE(rev.summary, ''),
+		       rev.snippets, rev.links, COALESCE(rev.provider, ''), COALESCE(rev.status, ''),
+		       rev.fetched_at
 `
+
+const jobFrom = `
+		FROM jobs j
+		LEFT JOIN applications a ON a.job_id = j.id
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(json_agg(json_build_object('source', src.source, 'source_url', src.source_url)), '[]') AS sources
+			FROM job_sources src WHERE src.job_id = j.id
+		) srcs ON true
+		LEFT JOIN LATERAL (
+			SELECT * FROM scores sc
+			WHERE sc.job_id = j.id AND sc.profile_id = ` + currentProfileID + `
+			LIMIT 1
+		) sc ON true
+		LEFT JOIN LATERAL (
+			SELECT true AS has_analysis, justification_md, tailoring_md, model, created_at
+			FROM analyses an
+			WHERE an.job_id = j.id AND an.profile_id = ` + currentProfileID + `
+			LIMIT 1
+		) an ON true
+		LEFT JOIN company_reviews rev
+		  ON rev.company_key = lower(trim(j.company))
+		 AND rev.role_key = lower(trim(j.title))
+`
+
+// salaryUSDExpr converts posted ranges to an approximate USD figure so
+// INR / EUR / GBP ranks compare. Missing currency + an India location
+// is treated as INR (Adzuna IN often omits currency). Static FX is for
+// ORDER BY only — the API still returns the source numbers.
+const salaryUSDExpr = `COALESCE(j.salary_max, j.salary_min)
+		* CASE
+			WHEN (UPPER(TRIM(COALESCE(j.currency, ''))) IN ('INR', 'RS')
+			      OR (COALESCE(TRIM(j.currency), '') = ''
+			          AND j.location ~* '(india|pune|bengaluru|bangalore|hyderabad|mumbai|chennai|noida|gurgaon|gurugram|delhi|kolkata)'))
+			     AND COALESCE(j.salary_max, j.salary_min) < 1000
+			THEN 100000
+			ELSE 1
+		  END
+		* CASE
+			WHEN UPPER(TRIM(COALESCE(j.currency, ''))) IN ('INR', 'RS') THEN 0.012
+			WHEN UPPER(TRIM(COALESCE(j.currency, ''))) IN ('EUR') THEN 1.08
+			WHEN UPPER(TRIM(COALESCE(j.currency, ''))) IN ('GBP') THEN 1.27
+			WHEN UPPER(TRIM(COALESCE(j.currency, ''))) = 'CAD' THEN 0.73
+			WHEN UPPER(TRIM(COALESCE(j.currency, ''))) = 'AUD' THEN 0.66
+			WHEN UPPER(TRIM(COALESCE(j.currency, ''))) = 'SGD' THEN 0.74
+			WHEN COALESCE(TRIM(j.currency), '') = ''
+			     AND j.location ~* '(india|pune|bengaluru|bangalore|hyderabad|mumbai|chennai|noida|gurgaon|gurugram|delhi|kolkata)'
+			     THEN 0.012
+			ELSE 1.0
+		  END`
+
+func jobOrder(sort string) string {
+	if strings.EqualFold(sort, "salary") {
+		return `
+		ORDER BY ` + salaryUSDExpr + ` DESC NULLS LAST,
+		         rev.rating DESC NULLS LAST,
+		         sc.composite DESC NULLS LAST,
+		         j.last_seen_at DESC`
+	}
+	return `
+		ORDER BY sc.composite DESC NULLS LAST, j.last_seen_at DESC`
+}
 
 func (s *Store) CreateCompany(ctx context.Context, name, ats, token string) (Company, error) {
 	var c Company
@@ -200,11 +270,22 @@ func scanJob(row rowScanner) (Job, error) {
 	var semantic *float64
 	var band *string
 	var matchedRaw, missingRaw []byte
+	var hasAnalysis bool
+	var just, tail, model *string
+	var analysisAt *time.Time
+	var revRating *float64
+	var revCount int
+	var revSummary, revProvider, revStatus string
+	var revSnips, revLinks []byte
+	var revFetched *time.Time
 	if err := row.Scan(&j.ID, &j.Title, &j.Company, &j.Location, &j.Source, &j.SourceURL,
-		&j.DescriptionMD, &posted, &j.Status, &j.LastSeenAt, &sources, &appID, &appStatus,
-		&composite, &skillCov, &semantic, &seniorityFit, &locationFit, &recency, &band, &matchedRaw, &missingRaw); err != nil {
+		&j.DescriptionMD, &j.SalaryMin, &j.SalaryMax, &j.Currency, &posted, &j.Status, &j.LastSeenAt, &sources, &appID, &appStatus,
+		&composite, &skillCov, &semantic, &seniorityFit, &locationFit, &recency, &band, &matchedRaw, &missingRaw,
+		&hasAnalysis, &just, &tail, &model, &analysisAt,
+		&revRating, &revCount, &revSummary, &revSnips, &revLinks, &revProvider, &revStatus, &revFetched); err != nil {
 		return Job{}, err
 	}
+	j.HasAnalysis = hasAnalysis
 	j.PostedAt = posted
 	if err := jsonUnmarshalSources(sources, &j.Sources); err != nil {
 		return Job{}, err
@@ -217,8 +298,19 @@ func scanJob(row rowScanner) (Job, error) {
 	}
 	if composite != nil && band != nil {
 		sc := &Score{
-			Composite: *composite, SkillCov: *skillCov, Semantic: semantic,
-			SeniorityFit: *seniorityFit, LocationFit: *locationFit, Recency: *recency, Band: *band,
+			Composite: *composite, Semantic: semantic, Band: *band,
+		}
+		if skillCov != nil {
+			sc.SkillCov = *skillCov
+		}
+		if seniorityFit != nil {
+			sc.SeniorityFit = *seniorityFit
+		}
+		if locationFit != nil {
+			sc.LocationFit = *locationFit
+		}
+		if recency != nil {
+			sc.Recency = *recency
 		}
 		if err := unmarshalJSON(matchedRaw, &sc.MatchedSkills); err != nil {
 			return Job{}, err
@@ -233,6 +325,49 @@ func scanJob(row rowScanner) (Job, error) {
 			sc.MissingSkills = []string{}
 		}
 		j.Score = sc
+	}
+	if just != nil || tail != nil {
+		a := &Analysis{}
+		if just != nil {
+			a.JustificationMD = *just
+		}
+		if tail != nil {
+			a.TailoringMD = *tail
+		}
+		if model != nil {
+			a.Model = *model
+		}
+		if analysisAt != nil {
+			a.CreatedAt = *analysisAt
+		}
+		j.Analysis = a
+		j.HasAnalysis = true
+	}
+	if revStatus != "" || len(revLinks) > 0 {
+		rev := &CompanyReview{
+			Company:     j.Company,
+			RoleTitle:   j.Title,
+			Rating:      revRating,
+			ReviewCount: revCount,
+			Summary:     revSummary,
+			Provider:    revProvider,
+			Status:      revStatus,
+		}
+		if err := unmarshalJSON(revSnips, &rev.Snippets); err != nil && len(revSnips) > 0 {
+			return Job{}, err
+		}
+		if rev.Snippets == nil {
+			rev.Snippets = []ReviewSnippet{}
+		}
+		if len(revLinks) > 0 {
+			if err := unmarshalJSON(revLinks, &rev.Links); err != nil {
+				return Job{}, err
+			}
+		}
+		if revFetched != nil {
+			rev.FetchedAt = *revFetched
+		}
+		j.Review = rev
 	}
 	return j, nil
 }

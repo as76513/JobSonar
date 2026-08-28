@@ -1,8 +1,13 @@
 # Week 6 — Explainable sub-scores + hard gates
 
-Status: all 7 days done and verified live (P1 tunable weights not started)
-Branch: `week-6`
-Headline outcome (from [docs/WEEKLY_PLAN.md](../../docs/WEEKLY_PLAN.md#week-6--explainable-sub-scores--hard-gates)): each job shows a score breakdown and a skill gap. Closes milestone **M2 — Explainable matching**. ✅
+Status: completed
+Branch: `week-6` (merged to `main` via PR #6)
+Headline outcome (from [docs/WEEKLY_PLAN.md](../../docs/WEEKLY_PLAN.md#week-6--explainable-sub-scores--hard-gates)): each job shows a score breakdown and a skill gap. Closes milestone **M2 — Explainable matching**.
+
+## Outcome
+P0 shipped and verified live. The agent writes named sub-scores (`skill_cov`, `semantic`, `seniority_fit`, `location_fit`, `recency`) plus composite/band into `scores`; the Go API only reads that table and ranks by `composite`. Hard gates (must-have skills, seniority, location) are SQL `CASE` expressions in `Store.upsert_score`, not Python/`if`. `GET /jobs` hides `excluded`; `GET /jobs/{id}` still explains the gate. Golden scoring test plus live-DB gate tests are in `services/agent/tests/`. Demo: 54 scored jobs, list banded strong/possible/stretch, detail shows all five sub-scores and skill gaps. No Bedrock. No auto-apply.
+
+**P1 leftover (not blocking close):** tunable weights in the UI.
 
 ## Design note before starting: scoring moves from Go to Python
 
@@ -64,5 +69,6 @@ Tunable weights in the UI — expose `score/composite.py`'s weight dict via a `P
 ## Definition of done
 Matches [CLAUDE.md](../../CLAUDE.md)'s checklist — `make test` passes including the new golden scoring test, hard gates are verifiably SQL (not model) logic, `docs/TRD.md` updated in the same change as the schema migration, runs fully local via `make up` (no Bedrock/cloud — that's Week 7).
 
-## Move to completed
-When the week is done, move this file to `plan/completed/week-6.md` and update `Status:` above.
+All P0 items satisfied. Milestone M2 (explainable matching) is closed.
+
+Next: Week 7 — tiered deep dive ([docs/WEEKLY_PLAN.md](../../docs/WEEKLY_PLAN.md#week-7--tiered-deep-dive)).

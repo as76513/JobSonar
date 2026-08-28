@@ -15,14 +15,16 @@ export ADZUNA_APP_ID ADZUNA_APP_KEY ADZUNA_COUNTRY ADZUNA_WHAT ADZUNA_WHERE
 export JOOBLE_API_KEY JOOBLE_BASE_URL API_ADDR
 export POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB POSTGRES_DSN POSTGRES_PORT
 export SQS_ENDPOINT_URL SQS_QUEUE_URL AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
-export OLLAMA_HOST EMBED_MODEL EMBED_BACKEND
+export OLLAMA_HOST EMBED_MODEL EMBED_BACKEND EMBED_BATCH EMBED_TEXT_CHARS SCORE_BATCH
+export LLM_MODEL DEEP_DIVE_BACKEND DEEP_DIVE_OPT_IN SHORTLIST_BAND
+export BRAVE_SEARCH_API_KEY
 RESUME_DIR ?= $(CURDIR)/data/resumes
 export RESUME_DIR
 
 POSTGRES_DSN ?= postgres://jobsonar:jobsonar@localhost:5432/jobsonar?sslmode=disable
 LIMIT        ?= 20
 
-.PHONY: up down migrate seed test connector publish worker ingest api web web-build demo wait-db show-jobs show jobs agent embed ollama-pull agent-install
+.PHONY: up down migrate seed test connector publish worker ingest api web web-build demo wait-db show-jobs show jobs agent embed ollama-pull agent-install reviews
 
 up:
 	$(COMPOSE) up -d
@@ -64,14 +66,19 @@ web-build:
 agent-install:
 	cd $(AGENT) && (command -v python3.11 >/dev/null && python3.11 || python3) -m venv .venv && .venv/bin/python -m pip install -U pip setuptools && .venv/bin/pip install -e ".[dev]"
 
-# Long-running parse/embed loop (Postgres only; no HTTP to the API).
-# EMBED_BACKEND=fake when Ollama has no nomic-embed-text model.
+# Long-running parse/embed/score/deep-dive loop (Postgres only; no HTTP to the API).
+# EMBED_BACKEND=fake and DEEP_DIVE_BACKEND=fake when Ollama has no models.
 agent:
 	cd $(AGENT) && PYTHONPATH=. $(AGENT_PY) -m jobsonar_agent
 
-# One drain-and-exit pass: pending resumes, missing profile/job vectors.
+# One drain-and-exit pass: pending resumes, missing vectors, scores, shortlist analyses.
 embed:
 	cd $(AGENT) && PYTHONPATH=. $(AGENT_PY) -m jobsonar_agent --once
+
+# Cache company+role review snippets for salary-listed jobs. Needs `make api`.
+# Without BRAVE_SEARCH_API_KEY this only stores Glassdoor / Mouthshut / web links.
+reviews:
+	curl -sS -X POST http://127.0.0.1$${API_ADDR:-:8080}/reviews/refresh
 
 ollama-pull:
 	$(COMPOSE) exec -T ollama ollama pull nomic-embed-text

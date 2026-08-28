@@ -11,8 +11,10 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 
 	"github.com/as76513/JobSonar/services/api/internal/handlers"
+	"github.com/as76513/JobSonar/services/api/internal/reviews"
 	"github.com/as76513/JobSonar/services/api/internal/store"
 )
 
@@ -45,15 +47,19 @@ func main() {
 			if e, ok := err.(*fiber.Error); ok {
 				code = e.Code
 			}
+			if code >= 500 {
+				log.Printf("api %s %s: %v", c.Method(), c.Path(), err)
+			}
 			return c.Status(code).JSON(fiber.Map{"error": err.Error()})
 		},
 	})
+	app.Use(recover.New())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000",
 		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 		AllowHeaders: "Origin, Content-Type, Accept",
 	}))
-	handlers.New(db, db, db, db, db, resumeDir).Mount(app)
+	handlers.New(db, db, db, db, db, resumeDir).WithReviews(reviews.NewFromEnv(), db).Mount(app)
 
 	go func() {
 		log.Printf("api listening on %s", addr)

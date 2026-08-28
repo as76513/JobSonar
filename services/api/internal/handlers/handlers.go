@@ -5,18 +5,25 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
+	"github.com/as76513/JobSonar/services/api/internal/reviews"
 	"github.com/as76513/JobSonar/services/api/internal/store"
 )
 
 const maxResumeBytes = 5 << 20
 
 type Jobs interface {
-	ListJobs(ctx context.Context) ([]store.Job, error)
+	ListJobs(ctx context.Context, opts store.JobListOpts) ([]store.Job, error)
 	GetJob(ctx context.Context, id uuid.UUID) (store.Job, error)
+}
+
+type ReviewCache interface {
+	UpsertCompanyReview(ctx context.Context, r store.CompanyReview) (store.CompanyReview, error)
+	ListSalaryJobCompanies(ctx context.Context) ([]store.CompanyRole, error)
 }
 
 type Companies interface {
@@ -46,18 +53,30 @@ type Handler struct {
 	applications Applications
 	resumes      Resumes
 	resumeDir    string
+	searcher     reviews.Searcher
+	reviews      ReviewCache
 }
 
 func New(jobs Jobs, companies Companies, profiles Profiles, applications Applications, resumes Resumes, resumeDir string) *Handler {
 	return &Handler{
 		jobs: jobs, companies: companies, profiles: profiles,
 		applications: applications, resumes: resumes, resumeDir: resumeDir,
+		searcher: reviews.LinkOnly{},
 	}
+}
+
+func (h *Handler) WithReviews(searcher reviews.Searcher, cache ReviewCache) *Handler {
+	if searcher != nil {
+		h.searcher = searcher
+	}
+	h.reviews = cache
+	return h
 }
 
 func (h *Handler) Mount(app *fiber.App) {
 	app.Get("/jobs", h.listJobs)
 	app.Get("/jobs/:id", h.getJob)
+	app.Post("/reviews/refresh", h.refreshReviews)
 	app.Post("/companies", h.createCompany)
 	app.Get("/profile", h.getProfile)
 	app.Put("/profile", h.putProfile)
@@ -73,13 +92,46 @@ func (h *Handler) Mount(app *fiber.App) {
 // Job.Score means the agent hasn't scored it yet, not that it scored
 // zero -- the web UI's existing "waiting on the agent" state covers that.
 
+func parseJobListOpts(c *fiber.Ctx) (store.JobListOpts, error) {
+	var opts store.JobListOpts
+	switch strings.ToLower(strings.TrimSpace(c.Query("has_salary"))) {
+	case "", "0", "false", "no":
+	case "1", "true", "yes":
+		opts.HasSalary = true
+	default:
+		return opts, fiber.NewError(fiber.StatusBadRequest, "has_salary must be 1 or 0")
+	}
+	sort := strings.ToLower(strings.TrimSpace(c.Query("sort")))
+	switch sort {
+	case "", "match":
+		opts.Sort = "match"
+	case "salary":
+		opts.Sort = "salary"
+	default:
+		return opts, fiber.NewError(fiber.StatusBadRequest, "sort must be match or salary")
+	}
+	return opts, nil
+}
+
 func (h *Handler) listJobs(c *fiber.Ctx) error {
-	jobs, err := h.jobs.ListJobs(c.Context())
+	opts, err := parseJobListOpts(c)
+	if err != nil {
+		return err
+	}
+	jobs, err := h.jobs.ListJobs(c.Context(), opts)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 	for i := range jobs {
 		jobs[i].DescriptionMD = "" // list view omits the description; getJob includes it
+		jobs[i].Analysis = nil     // keep has_analysis; omit prose from the list payload
+		if jobs[i].Review != nil {
+			jobs[i].Review.Snippets = nil
+		} else {
+			links, _ := reviews.LinkOnly{}.Search(c.Context(), jobs[i].Company, jobs[i].Title)
+			jobs[i].Review = &links
+			jobs[i].Review.Snippets = nil
+		}
 	}
 	return c.JSON(jobs)
 }
@@ -96,7 +148,64 @@ func (h *Handler) getJob(c *fiber.Ctx) error {
 		}
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
+	if rev := h.ensureReview(c.Context(), job); rev != nil {
+		job.Review = rev
+	}
 	return c.JSON(job)
+}
+
+func (h *Handler) ensureReview(ctx context.Context, job store.Job) *store.CompanyReview {
+	if !reviews.Stale(job.Review, time.Now()) {
+		return job.Review
+	}
+	rev, err := h.searcher.Search(ctx, job.Company, job.Title)
+	if err != nil {
+		fallback, _ := reviews.LinkOnly{}.Search(ctx, job.Company, job.Title)
+		fallback.Status = "error"
+		fallback.Error = "review search failed"
+		rev = fallback
+	}
+	if h.reviews != nil {
+		if saved, err := h.reviews.UpsertCompanyReview(ctx, rev); err == nil {
+			return &saved
+		}
+	}
+	return &rev
+}
+
+func (h *Handler) refreshReviews(c *fiber.Ctx) error {
+	if h.reviews == nil {
+		return fiber.NewError(fiber.StatusNotImplemented, "review cache not configured")
+	}
+	pairs, err := h.reviews.ListSalaryJobCompanies(c.Context())
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	const maxRefresh = 40
+	n := 0
+	for _, p := range pairs {
+		if n >= maxRefresh {
+			break
+		}
+		rev, err := h.searcher.Search(c.Context(), p.Company, p.Title)
+		if err != nil {
+			rev, _ = reviews.LinkOnly{}.Search(c.Context(), p.Company, p.Title)
+			rev.Status = "error"
+			rev.Error = "review search failed"
+		}
+		if _, err := h.reviews.UpsertCompanyReview(c.Context(), rev); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		n++
+		if h.searcher.Name() == "brave" && n < len(pairs) && n < maxRefresh {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	return c.JSON(fiber.Map{
+		"refreshed": n,
+		"total":     len(pairs),
+		"provider":  h.searcher.Name(),
+	})
 }
 
 type createCompanyReq struct {
